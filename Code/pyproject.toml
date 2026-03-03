@@ -1,0 +1,18 @@
+[project]
+name = "isml"
+version = "0.1.0"
+description = "ISML modeling scripts (XGBoost / GeoXGBoost + SHAP)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "geoxgboost",
+    "matplotlib",
+    "numpy",
+    "openpyxl",
+    "pandas",
+    "pyyaml",
+    "scikit-learn",
+    "scipy",
+    "shap",
+    "xgboost",
+]

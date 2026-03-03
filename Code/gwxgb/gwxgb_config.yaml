@@ -1,0 +1,122 @@
+data:
+  # CSV data path
+  path: "../../Data/年份终市级指标数据（5年截面）/终市级指标数据_with_latlon_2005.csv"
+  # Dependent variable (target)
+  target:  "co2总量（万吨）"
+  # Feature columns (excluding target and coords)
+  features:
+    [ 
+    "施工面积(万平方米)",
+    "建筑面积(万平方米)",
+    "电力消费量（亿千瓦小时）",
+    "电网因子（kgco2/kwh)",
+    "人均地区生产总值(元）","第三产业比重",
+    "总人口（万人）",
+    "城镇化率",
+    "能源结构",
+    "气候区",
+    "单位面积建材碳排放（kgco2/m2)"
+    ]
+  # Coordinate columns (e.g. longitude, latitude) — 请按实际字段名修改
+  coords: ["纬度", "经度"]
+  sep: ","
+  encoding: "utf-8"
+
+model:
+  # XGBoost hyperparameters used inside GeoXGBoost
+  params:
+    n_estimators: 100 #default is 100   树的数量，默认100
+    learning_rate: 0.1 #default is 0.3   学习率，默认0.3
+    max_depth: 4 #default is 4     树的最大深度，默认4
+    min_child_weight: 5 #default is 3     叶子节点最小样本权重和，默认3
+    gamma: 0.05 #default is 0     节点分裂所需的最小损失下降，默认0
+    subsample: 0.6 #default is 1     行采样比例（样本子采样），默认1
+    colsample_bytree: 0.8 #default is 1     列采样比例（特征子采样），默认1
+    reg_alpha: 0 #default is 0     L1 正则化系数，默认0
+    reg_lambda: 1 #default is 1     L2 正则化系数，默认1
+  random_state: 42
+
+grid_search:
+  # 是否启用全局 XGBoost 的网格搜索 (True/False)
+  # 注意：默认关闭（开启后 param_grid 组合数可能很大，运行时间会非常久）
+  enabled: False
+  # 优化的评估指标 (例如: neg_root_mean_squared_error, neg_mean_absolute_error, r2)
+  scoring: "neg_root_mean_squared_error"
+  # 交叉验证折数 (默认 5)
+  cv: 5
+  # 参数搜索网格; 键名必须与 XGBoost 参数名一致
+  param_grid:
+    n_estimators: [100, 200, 300, 500]        # 树的数量
+    max_depth: [3, 4, 5, 6, 7]                # 树的最大深度
+    learning_rate: [0.01, 0.05, 0.1, 0.2]     # 学习率
+    min_child_weight: [1, 3, 5]               # 叶子节点最小权重和 (防过拟合)
+    gamma: [0.05, 0.1, 0.2]                      # 节点分裂所需的最小损失下降
+    subsample: [0.6, 0.8, 1.0]                # 样本采样率
+    colsample_bytree: [0.6, 0.8, 1.0]         # 特征采样率
+  # 详细程度 (0=无, 1=进度条, 2=详细)
+  verbose: 1
+
+gw:
+  # Bandwidth:
+  # for Adaptive kernel = number of nearest neighbours;
+  # for Fixed = distance threshold
+  bw: 78
+  # Whether to optimize bw automatically (0/1)
+  optimize_bw: 1
+  # Optional search range for bw optimization; if omitted, a default range around `bw` is used.
+  # - Adaptive: integers (neighbour count)
+  # - Fixed: floats (distance threshold)
+  bw_min: 40
+  bw_max: 120
+  bw_step: 5
+  # "Adaptive" or "Fixed"
+  kernel: "Adaptive"
+  # Whether to use spatial weights matrix
+  spatial_weights: True
+  # XGBoost feature importance type used internally by geoxgboost
+  feat_importance: "gain"
+  # "varying" or "fixed"
+  alpha_wt_type: "varying"
+  # Alpha weight value between 0 and 1
+  alpha_wt: 1.0
+  # Test size used inside geoxgboost (for internal evaluation)
+  test_size: 0.3
+  seed: 7
+  n_splits: 5
+
+shap:
+  # SHAP 计算引擎: auto / shap / xgboost
+  # - auto: 默认；当 shap 版本较旧且 xgboost>=3 时自动改用 xgboost 原生 SHAP（避免 TreeExplainer 报错）
+  # - shap: 强制使用 shap.TreeExplainer
+  # - xgboost: 强制使用 xgboost Booster.predict(pred_contribs/pred_interactions)
+  engine: "auto"
+  # Whether to draw SHAP summary plot (0/1)
+  use_summary: 1
+  # Whether to draw SHAP dependence plots (0/1)
+  use_dependence: 1
+  # Interaction plots: base feature and with-features
+  # interaction_base: "x2"
+  # interaction_with: ["x3", "x5"]
+  # If dependence_features is omitted, top-N by mean |SHAP| will be used
+  # dependence_features: ["x1", "x2"]
+  dependence_top_n: 5
+  # Whether to compute SHAP interaction values (0/1)
+  compute_interactions: 0
+  # Top-N interaction pairs saved to CSV
+  interaction_top_n_pairs: 20
+
+output:
+  # Output directory for GeoXGBoost SHAP results
+  output_dir: "../../Output/output_gwxgb"
+  # SHAP summary plot filename
+  summary_file: "gw_shap_summary.png"
+  # SHAP dependence plot filename prefix
+  dependence_prefix: "gw_shap_dependence_"
+  # SHAP interaction plot filename prefix
+  interaction_prefix: "gw_shap_interaction_"
+  # SHAP interaction pairs CSV filename
+  interaction_pairs_file: "gw_shap_interactions.csv"
+  # Mean |SHAP| bar plot filename
+  mean_abs_shap_file: "gw_mean_abs_shap.png"
+  # Log file for recording run details
+  log_file: "run_log.txt"

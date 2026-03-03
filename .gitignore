@@ -1,0 +1,85 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+*.pyd
+*.dll
+
+# Distribution / packaging
+build/
+dist/
+eggs/
+.eggs/
+wheels/
+*.egg-info/
+*.egg
+*.whl
+
+# Virtual environments
+.env
+.venv
+.uv-cache/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+**/.venv/
+**/.uv-cache/
+**/env/
+**/venv/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints
+
+# Testing
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.pytest_cache/
+
+# Type checking / linting
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.code-workspace
+*.sublime-project
+*.sublime-workspace
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Temp / backups
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*.orig
+*~
+~$*.xlsx
+
+# Input data (raw / non-portable)
+Data/**
+
+# Project outputs (generated)
+Output/**
+
+# Local demos / experiments
+test/**
