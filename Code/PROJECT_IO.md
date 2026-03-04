@@ -15,6 +15,8 @@ uv run python .\gwxgb\gwxgb_shap.py -c .\gwxgb\gwxgb_config.yaml
 
 说明：脚本会把 YAML 中的相对路径按 **YAML 文件所在目录** 解析，所以不强依赖 `cd` 到哪里运行。
 
+输出目录约定：`output.output_dir` 作为**基准目录**；当 `output.timestamp_subdir: 1`（默认）时，脚本会在其下创建 `run_prefix + timestamp` 子目录，并将**本次运行**的所有产出（含 log）写入该子目录。
+
 ## 2) 脚本清单与 I/O
 
 ### A) `xgb/xgb_shap.py`（全局 XGBoost + SHAP）
@@ -27,13 +29,14 @@ uv run python .\gwxgb\gwxgb_shap.py -c .\gwxgb\gwxgb_config.yaml
   - 模型参数：`model.params`（传给 `xgboost.XGBRegressor`）
   - 评估（可选）：`cv.use_cv`、`cv.n_splits`、`model.test_size`
   - SHAP（可选）：`shap.use_summary`、`shap.use_dependence`、`shap.compute_interactions` 等
-- **输出**（写入 `output.output_dir`）
+- **输出**（写入 `output.output_dir/<run_prefix><timestamp>/`；可通过 `output.timestamp_subdir: 0` 关闭）
   - SHAP summary：`output.summary_file`（默认 `shap_summary.png`）
   - Mean(|SHAP|)：`output.mean_abs_shap_file`（默认 `mean_abs_shap.png`）
   - Dependence：`output.dependence_prefix + <feature>.png`
   - 交互对 CSV：`output.interaction_pairs_file`
   - 固定基准交互图（可选）：`output.interaction_prefix + <base>_x_<other>.png`
   - 模型文件（可选）：`output.model_file`（若配置则保存 Booster）
+  - 日志：`output.log_file`（默认 `run_log.txt`）
 
 ### B) `xgb/xgb_nestedcv_tune.py`（嵌套交叉验证自动调参）
 
@@ -57,7 +60,7 @@ uv run python .\gwxgb\gwxgb_shap.py -c .\gwxgb\gwxgb_config.yaml
   - 网格搜索（可选）：`grid_search.enabled=True` + `grid_search.param_grid`（默认关闭，避免运行时间过长）
   - 带宽与空间权重：`gw.*`（供 `geoxgboost.optimize_bw` / `geoxgboost.gxgb`）
   - SHAP：对**全局基线模型**输出图/交互对（不对每个本地模型做 SHAP）
-- **输出**（写入 `output.output_dir`）
+- **输出**（写入 `output.output_dir/<run_prefix><timestamp>/`；可通过 `output.timestamp_subdir: 0` 关闭）
   - 全局 SHAP summary：`output.summary_file`（默认 `gw_shap_summary.png`）
   - Mean(|SHAP|)：`output.mean_abs_shap_file`（默认 `gw_mean_abs_shap.png`）
   - Dependence：`output.dependence_prefix + <feature>.png`
@@ -65,6 +68,9 @@ uv run python .\gwxgb\gwxgb_shap.py -c .\gwxgb\gwxgb_config.yaml
   - 日志：`output.log_file`（默认 `run_log.txt`）
   - GeoXGBoost 带宽优化结果：`BW_results.csv`
   - GeoXGBoost 本地模型结果：`LW_GXGB.xlsx`
+  - （可选）局部模型 SHAP（开启 `local_shap.enabled=1`）
+    - 每个局部模型的 SHAP summary 图：`<run_output_dir>/<local_shap.output_subdir>/<local_shap.plots_dir>/shap_local_*.png`
+    - 汇总 CSV（所有局部模型、每个邻域样本的 SHAP 值）：`<run_output_dir>/<local_shap.output_subdir>/<local_shap.csv_file>`
 
 ## 3) 现有输出（已归档）
 
@@ -72,4 +78,4 @@ uv run python .\gwxgb\gwxgb_shap.py -c .\gwxgb\gwxgb_config.yaml
   - `Output/output_gwxgb/_legacy/20260114_from_Code/`
 - 2026-02-26 运行时在仓库根目录生成的同名输出，已从仓库根目录移出并归档到：
   - `Output/output_gwxgb/_legacy/20260226_from_repo_root/`
-- 当前脚本运行的默认输出位置为：`Output/output_gwxgb/`（会覆盖同名文件）
+- 当前脚本默认输出位置为：`Output/output_gwxgb/<gwxgb_时间戳>/`（不覆盖历史运行）

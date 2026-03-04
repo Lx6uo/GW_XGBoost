@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import datetime
+import logging
 from pathlib import Path
+import sys
 from typing import Any, Dict, List, Optional
 
 import matplotlib
@@ -298,6 +301,82 @@ def ensure_output_dir(config: Dict[str, Any]) -> Path:
     output_cfg["output_dir"] = str(output_path)
     output_path.mkdir(parents=True, exist_ok=True)
     return output_path
+
+
+def _sanitize_subdir_name(name: str) -> str:
+    # Windows/macOS/Linux 通用：保留字母数字 + 少量安全字符，其余替换为 '-'
+    safe_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
+    cleaned = "".join(ch if ch in safe_chars else "-" for ch in str(name))
+    cleaned = cleaned.strip(" .-_")
+    return cleaned or "run"
+
+
+def ensure_run_output_dir(config: Dict[str, Any], *, prefix: str = "") -> Path:
+    """按运行时间创建独立输出目录，并将 config.output.output_dir 指向该目录。
+
+    - base 输出目录来自 `output.output_dir`
+    - run 子目录默认名：`<run_prefix><timestamp>`
+    - 可通过以下配置覆盖：
+      - output.timestamp_subdir: 0/1（默认 1）
+      - output.timestamp_format: str（默认 "%Y%m%d_%H%M%S"）
+      - output.run_prefix: str（默认使用函数参数 prefix）
+    """
+    if isinstance(config.get("_run_output_dir"), str) and config["_run_output_dir"]:
+        return Path(config["_run_output_dir"])
+
+    output_cfg = config.get("output")
+    if not isinstance(output_cfg, dict):
+        output_cfg = {}
+        config["output"] = output_cfg
+
+    enabled = int(output_cfg.get("timestamp_subdir", 1)) == 1
+    base_output_dir = ensure_output_dir(config)
+    config["_base_output_dir"] = str(base_output_dir)
+
+    if not enabled:
+        config["_run_output_dir"] = str(base_output_dir)
+        return base_output_dir
+
+    timestamp_format = str(output_cfg.get("timestamp_format", "%Y%m%d_%H%M%S"))
+    run_prefix = str(output_cfg.get("run_prefix") or prefix or "")
+    ts = datetime.datetime.now().strftime(timestamp_format)
+    subdir = _sanitize_subdir_name(f"{run_prefix}{ts}")
+
+    candidate = base_output_dir / subdir
+    if candidate.exists():
+        for i in range(1, 1000):
+            alt = base_output_dir / f"{subdir}_{i:03d}"
+            if not alt.exists():
+                candidate = alt
+                break
+
+    output_cfg["output_dir"] = str(candidate)
+    run_output_dir = ensure_output_dir(config)
+    config["_run_output_dir"] = str(run_output_dir)
+    return run_output_dir
+
+
+def setup_logging(config: Dict[str, Any], output_dir: Path) -> None:
+    """配置日志记录，将日志同时输出到控制台和文件。"""
+    output_cfg = config.get("output") or {}
+    log_file = output_cfg.get("log_file", "run_log.txt")
+    log_path = output_dir / str(log_file)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler(log_path, encoding="utf-8"),
+            logging.StreamHandler(sys.stdout),
+        ],
+        force=True,
+    )
+    logging.info("=" * 50)
+    logging.info(f"本次运行开始: {datetime.datetime.now()}")
+    logging.info(f"输出目录: {output_dir.resolve()}")
+    config_path = config.get("_config_path")
+    if config_path:
+        logging.info(f"配置文件: {config_path}")
 
 
 def save_model_if_requested(
@@ -681,9 +760,17 @@ def main() -> None:
 
     config = load_config(config_path)
 
+    output_dir = ensure_run_output_dir(config, prefix="xgb_")
+    setup_logging(config, output_dir)
+
     print(f"使用配置文件: {config_path}")
+    logging.info(f"使用配置文件: {config_path}")
     df, X, y = load_dataset(config)
     print(
+        f"已加载数据 `{config['data']['path']}`，"
+        f"共 {df.shape[0]} 行，{df.shape[1]} 列。"
+    )
+    logging.info(
         f"已加载数据 `{config['data']['path']}`，"
         f"共 {df.shape[0]} 行，{df.shape[1]} 列。"
     )
@@ -696,8 +783,7 @@ def main() -> None:
         model_full, X, config
     )
     print("已在全量数据上训练模型并计算 SHAP 值。")
-
-    output_dir = ensure_output_dir(config)
+    logging.info("已在全量数据上训练模型并计算 SHAP 值。")
 
     evaluate_full_model(model_full, X, y, config, output_dir)
     summarize_and_save_interactions(interaction_values, X, config, output_dir)
@@ -708,6 +794,7 @@ def main() -> None:
     save_model_if_requested(model_full, config, output_dir)
 
     print(f"所有输出文件已保存到目录: {output_dir.resolve()}")
+    logging.info(f"所有输出文件已保存到目录: {output_dir.resolve()}")
 
 
 if __name__ == "__main__":

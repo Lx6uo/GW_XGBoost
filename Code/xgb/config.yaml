@@ -70,6 +70,14 @@ shap:
 output:
   # 输出目录
   output_dir: "../../Output/output_260303"
+  # 是否按运行时间自动创建子目录（0/1；默认 1）
+  timestamp_subdir: 1
+  # 子目录时间格式（仅用于命名）
+  timestamp_format: "%Y%m%d_%H%M%S"
+  # 子目录名前缀（可选；不填则脚本默认用 xgb_）
+  run_prefix: "xgb_"
+  # 日志文件名（保存到本次运行 output 子目录下）
+  log_file: "run_log.txt"
   # 已有模型文件名（可选）
   # model_file: "xgb_model.json"
   # SHAP summary 图文件名

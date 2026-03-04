@@ -4,12 +4,13 @@ import argparse
 import os
 from pathlib import Path
 import sys
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Iterable, Tuple
 import logging
 import datetime
 import xgboost as xgb
 from sklearn.model_selection import GridSearchCV as SklearnGridSearchCV, KFold
 import numpy as np
+from scipy.spatial import distance_matrix
 
 import matplotlib
 
@@ -28,6 +29,7 @@ if _XGB_DIR.exists() and str(_XGB_DIR) not in sys.path:
 from xgb_shap import (
     load_config,
     ensure_output_dir,
+    ensure_run_output_dir,
     build_and_train_model,
     compute_shap_and_interactions,
     plot_shap_summary,
@@ -291,6 +293,172 @@ def run_gxgb(
     return result
 
 
+def _local_shap_cfg(config: Dict[str, Any]) -> Dict[str, Any]:
+    local_cfg = config.get("local_shap") or {}
+    return local_cfg if isinstance(local_cfg, dict) else {}
+
+
+def _local_shap_enabled(config: Dict[str, Any]) -> bool:
+    cfg = _local_shap_cfg(config)
+    return int(cfg.get("enabled", 0)) == 1
+
+
+def _iter_local_models(result: Dict[str, Any]) -> Iterable[tuple[int, Any]]:
+    models = result.get("bestLocalModel")
+    if models is None:
+        return iter(())
+    if not isinstance(models, (list, tuple)):
+        return iter(())
+    return ((i, m) for i, m in enumerate(models) if m is not None)
+
+
+def _select_local_positions(
+    dist_col: np.ndarray,
+    *,
+    bw: Any,
+    kernel: str,
+) -> np.ndarray:
+    order = np.argsort(dist_col, kind="mergesort")
+    if str(kernel).strip().lower() == "adaptive":
+        k = max(2, int(bw) + 1)  # 至少包含自己+1个邻居
+        return order[:k]
+
+    # Fixed kernel：按距离阈值筛选；如果过少则回退到最近的 2 个点
+    threshold = float(bw)
+    pos = np.flatnonzero(dist_col <= threshold)
+    if len(pos) < 2:
+        return order[:2]
+    return pos[np.argsort(dist_col[pos], kind="mergesort")]
+
+
+def export_local_models_shap(
+    result: Dict[str, Any],
+    *,
+    config: Dict[str, Any],
+    X: pd.DataFrame,
+    y: pd.Series,
+    coords: pd.DataFrame,
+    bw: Any,
+    output_dir: Path,
+) -> None:
+    """为每个局部模型输出 SHAP summary 图，并汇总导出所有局部 SHAP 值到一个 CSV。
+
+    说明：该功能默认关闭（local_shap.enabled=0），因为会生成大量图片并耗时较久。
+    """
+    if not _local_shap_enabled(config):
+        return
+
+    local_cfg = _local_shap_cfg(config)
+    subdir = str(local_cfg.get("output_subdir", "local_shap")).strip() or "local_shap"
+    local_root = (output_dir / subdir).resolve()
+    plots_dir = local_root / str(local_cfg.get("plots_dir", "summary_plots")).strip()
+    csv_file = str(local_cfg.get("csv_file", "local_shap_values.csv")).strip() or "local_shap_values.csv"
+    csv_path = local_root / csv_file
+
+    save_plots = int(local_cfg.get("save_summary_plots", 1)) == 1
+    save_csv = int(local_cfg.get("save_shap_csv", 1)) == 1
+    max_models = int(local_cfg.get("max_models", 0))  # 0 表示全部
+    log_every = int(local_cfg.get("log_every", 10))
+
+    local_root.mkdir(parents=True, exist_ok=True)
+    if save_plots:
+        plots_dir.mkdir(parents=True, exist_ok=True)
+
+    n = len(X)
+    if n == 0:
+        logging.info("local_shap: X 为空，跳过。")
+        return
+
+    models = result.get("bestLocalModel")
+    if not isinstance(models, (list, tuple)) or len(models) == 0:
+        keys = sorted([str(k) for k in result.keys()])
+        logging.warning(
+            "local_shap: result 中未找到 `bestLocalModel`（或为空），无法计算局部 SHAP。"
+            f"可用 keys: {keys}"
+        )
+        return
+
+    coords_arr = coords.to_numpy(dtype=float, copy=False)
+    dist_mat = distance_matrix(coords_arr, coords_arr)
+
+    gw_cfg = config.get("gw") or {}
+    kernel = str(gw_cfg.get("kernel", "Adaptive"))
+
+    # 为局部 SHAP 强制使用 xgboost 原生 SHAP（更稳健，也可避免 shap.TreeExplainer 兼容性问题）
+    # 且不计算交互作用（局部模型数量多，交互作用计算非常慢）
+    shap_cfg = dict(config.get("shap") or {})
+    shap_cfg["engine"] = "xgboost"
+    shap_cfg["compute_interactions"] = 0
+    local_config = dict(config)
+    local_config["shap"] = shap_cfg
+
+    first_write = True
+    total_exported_rows = 0
+
+    for pos, model in _iter_local_models(result):
+        if max_models > 0 and pos >= max_models:
+            break
+        if pos >= n:
+            continue
+
+        try:
+            dist_col = np.asarray(dist_mat[:, pos], dtype=float)
+            local_positions = _select_local_positions(
+                dist_col, bw=bw, kernel=kernel
+            )
+            local_X = X.iloc[local_positions]
+            shap_values, _ = compute_shap_and_interactions(model, local_X, local_config)
+
+            if save_plots:
+                plot_path = plots_dir / f"shap_local_{pos + 1:04d}.png"
+                plt.figure()
+                import shap  # 延迟导入以减少脚本启动时开销
+
+                shap.summary_plot(shap_values, local_X, show=False)
+                plt.tight_layout()
+                plt.savefig(plot_path, dpi=300, bbox_inches="tight")
+                plt.close()
+
+            if save_csv:
+                df_out = pd.DataFrame(
+                    shap_values,
+                    columns=[f"shap_{c}" for c in local_X.columns],
+                )
+                df_out.insert(0, "distance", dist_col[local_positions])
+                df_out.insert(0, "sample_pos", local_positions)
+                df_out.insert(0, "sample_index", local_X.index.to_numpy())
+                df_out.insert(0, "y", y.iloc[local_positions].to_numpy())
+                df_out.insert(0, "center_pos", pos)
+                df_out.insert(0, "center_index", X.index[pos])
+                df_out.insert(0, "kernel", kernel)
+                df_out.insert(0, "bw", bw)
+
+                mode = "w" if first_write else "a"
+                df_out.to_csv(
+                    csv_path,
+                    mode=mode,
+                    index=False,
+                    header=first_write,
+                    encoding="utf-8-sig",
+                )
+                first_write = False
+                total_exported_rows += int(df_out.shape[0])
+
+        except Exception as exc:
+            logging.warning(f"local_shap: 位置 pos={pos} 计算失败，已跳过。原因: {exc}")
+            continue
+
+        if log_every > 0 and (pos + 1) % log_every == 0:
+            logging.info(
+                f"local_shap: 已完成 {pos + 1}/{n} 个局部模型，累计导出 {total_exported_rows} 行。"
+            )
+
+    if save_plots:
+        logging.info(f"local_shap: summary 图输出目录: {plots_dir.resolve()}")
+    if save_csv:
+        logging.info(f"local_shap: SHAP 值 CSV: {csv_path.resolve()}（共 {total_exported_rows} 行）")
+
+
 
 def setup_logging(config: Dict[str, Any]) -> None:
     """配置日志记录，将日志同时输出到控制台和文件。"""
@@ -325,9 +493,12 @@ def main() -> None:
     config = load_config(config_path)
 
     _patch_geoxgboost_parallelism()
+
+    output_dir = ensure_run_output_dir(config, prefix="gwxgb_")
     
     # 初始化日志
     setup_logging(config)
+    logging.info(f"输出目录: {output_dir.resolve()}")
 
     print(f"使用配置文件: {config_path}")
     df, X, y, coords = load_dataset(config)
@@ -340,8 +511,6 @@ def main() -> None:
         f"已加载数据 `{config['data']['path']}`，"
         f"共 {df.shape[0]} 行，{df.shape[1]} 列（含坐标列）。"
     )
-
-    output_dir = ensure_output_dir(config)
 
     # 在训练最终模型前，尝试进行网格搜索优化参数
     optimize_global_model(config, X, y)
@@ -364,7 +533,16 @@ def main() -> None:
     bw_opt = optimize_bandwidth(config, X, y, coords, output_dir=output_dir)
     logging.info(f"最优带宽 bw = {bw_opt}")
     
-    _ = run_gxgb(config, X, y, coords, bw=bw_opt, output_dir=output_dir)
+    result_local = run_gxgb(config, X, y, coords, bw=bw_opt, output_dir=output_dir)
+    export_local_models_shap(
+        result_local,
+        config=config,
+        X=X,
+        y=y,
+        coords=coords,
+        bw=bw_opt,
+        output_dir=output_dir,
+    )
 
     logging.info(f"所有全局 XGBoost SHAP 输出文件已保存到目录: {output_dir.resolve()}")
     print(f"所有全局 XGBoost SHAP 输出文件已保存到目录: {output_dir.resolve()}")
