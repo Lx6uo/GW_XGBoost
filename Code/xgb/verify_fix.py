@@ -1,4 +1,5 @@
 
+import logging
 import pandas as pd
 from pathlib import Path
 
@@ -14,26 +15,34 @@ config = {
     }
 }
 
-try:
-    df, X, y = load_dataset(config)
-    print("Data loaded successfully.")
-    print("Column dtypes:")
-    print(df.dtypes)
-    
-    # Check if previously object columns are now numeric
-    expected_numeric = ["x3", "x5", "x7", "x8", "x9"]
-    all_numeric = True
-    for col in expected_numeric:
-        if not pd.api.types.is_numeric_dtype(df[col]):
-            print(f"Error: Column {col} is still {df[col].dtype}")
-            all_numeric = False
-        else:
-            print(f"Success: Column {col} converted to {df[col].dtype}")
-            
-    if all_numeric:
-        print("Verification PASSED: All target columns converted to numeric.")
-    else:
-        print("Verification FAILED: Some columns remained non-numeric.")
+def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+    )
 
-except Exception as e:
-    print(f"An error occurred: {e}")
+    try:
+        df, _, _ = load_dataset(config)
+        logging.info("Data loaded successfully.")
+        logging.info("Column dtypes:\n%s", df.dtypes)
+
+        # Check if previously object columns are now numeric
+        expected_numeric = ["x3", "x5", "x7", "x8", "x9"]
+        all_numeric = True
+        for col in expected_numeric:
+            if not pd.api.types.is_numeric_dtype(df[col]):
+                logging.error("Error: Column %s is still %s", col, df[col].dtype)
+                all_numeric = False
+            else:
+                logging.info("Success: Column %s converted to %s", col, df[col].dtype)
+
+        if all_numeric:
+            logging.info("Verification PASSED: All target columns converted to numeric.")
+        else:
+            logging.warning("Verification FAILED: Some columns remained non-numeric.")
+
+    except Exception as exc:
+        logging.exception("An error occurred: %s", exc)
+
+
+if __name__ == "__main__":
+    main()

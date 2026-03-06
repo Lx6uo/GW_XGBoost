@@ -58,7 +58,7 @@ python .\Code\gwxgb\gwxgb_shap.py -c .\Code\gwxgb\gwxgb_config.yaml
     - `cv.use_cv=1` 时执行 K 折交叉验证并打印每折/均值指标
     - `model.test_size` 有效时做 hold-out（训练/测试划分）并打印指标（含回归 + 基于中位数阈值的“二分类”指标）
   - SHAP：`shap.use_summary`、`shap.use_dependence`、`shap.compute_interactions`、`shap.dependence_top_n`、`shap.interaction_*`
-- **输出（写入 `output.output_dir/<run_prefix><timestamp>/`；默认启用，`output.timestamp_subdir: 0` 可关闭）**
+- **输出（写入 `output.output_dir/<run_prefix>_<data_stem>_<timestamp>/`；默认启用，`output.timestamp_subdir: 0` 可关闭）**
   - SHAP summary 图：`output.summary_file`（默认 `shap_summary.png`）
   - Mean(|SHAP|) 条形图：`output.mean_abs_shap_file`（代码缺省为 `mean_abs_shap.png`；配置可不写）
   - Dependence 图：`output.dependence_prefix + <feature>.png`
@@ -66,6 +66,7 @@ python .\Code\gwxgb\gwxgb_shap.py -c .\Code\gwxgb\gwxgb_config.yaml
   - Top 交互特征对：`output.interaction_pairs_file`（CSV）
   - 可选模型文件：若配置 `output.model_file`，则保存 `XGBoost Booster.save_model()` 的结果
   - 日志：`output.log_file`（默认 `run_log.txt`）
+  - 说明：默认开启 `output.capture_prints: 1`，将控制台 stdout/stderr 一并写入日志文件，便于复盘。
 
 ### B. `Code/xgb/xgb_nestedcv_tune.py`（嵌套交叉验证自动调参）
 
@@ -76,14 +77,25 @@ python .\Code\gwxgb\gwxgb_shap.py -c .\Code\gwxgb\gwxgb_config.yaml
   - 调参范围：`tuning.use_nested_cv=1` 且配置 `tuning.param{1,2,3}` 与对应 `*_values`
   - 折数：`tuning.outer_splits`、`tuning.inner_splits`
 - **输出**
-  - **仅控制台输出**：每个 outer fold 的指标与 best_params；最后输出一段可直接写回 `config.yaml` 的 `model.params` 建议片段（不写文件）。
+  - 写入 `output.output_dir/<run_prefix>_<data_stem>_<timestamp>/`（日志 `run_log.txt`，并同时输出到控制台）；最后会输出一段可直接写回 `config.yaml` 的 `model.params` 建议片段。
 
 ### C. `Code/xgb/verify_fix.py`（数据类型/百分号转换验证）
 
 - **输入**：脚本内写死的 `config`（调用 `xgb_shap.load_dataset`），主要用于检查 CSV 中带 `%` 的列是否被自动转为数值。
 - **输出**：仅控制台输出（各列 dtype 与验证通过/失败信息）。
 
-### D. `Code/gwxgb/gwxgb_shap.py`（GeoXGBoost + 带宽优化 + 全局 SHAP）
+### D. `Code/xgb/feature_corr_heatmap.py`（特征相关性矩阵 + 热力图）
+
+- **配置文件**：默认读取 `Code/xgb/config.yaml`（支持 `-c`）。
+- **输入**：同 `xgb_shap.py`（`data.*`）。
+- **输出**：写入 `output.output_dir/<run_prefix>_<data_stem>_<timestamp>/correlation/`（相关性矩阵 CSV + 热力图 PNG）。
+
+### E. `Code/xgb/xgb_gridcv_tune.py`（单层 GridSearchCV：候选组合排行榜）
+
+- **用途**：更快地“选参”，并把每个候选组合的 CV 表现按排序输出与落盘（CSV）。
+- **注意**：best_score 往往偏乐观，不能等价为最终泛化性能；要做更可信评估请用 nested CV 或独立测试集。
+
+### F. `Code/gwxgb/gwxgb_shap.py`（GeoXGBoost + 带宽优化 + 全局 SHAP）
 
 - **配置文件**：默认读取 `Code/gwxgb/gwxgb_config.yaml`（支持 `-c`）。
 - **输入**
@@ -93,12 +105,13 @@ python .\Code\gwxgb\gwxgb_shap.py -c .\Code\gwxgb\gwxgb_config.yaml
   - 全局网格搜索（可选）：`grid_search.enabled=1` 且提供 `grid_search.param_grid`
   - 带宽优化与本地模型：`gw.*`（`bw`、`kernel`、`optimize_bw`、`bw_min/max/step`、`spatial_weights` 等）
   - SHAP：复用 `xgb_shap.py` 的 SHAP 逻辑，仅对**全局 XGBoost 基线模型**输出图与交互对
-- **输出（写入 `output.output_dir/<run_prefix><timestamp>/`；默认启用，`output.timestamp_subdir: 0` 可关闭）**
+- **输出（写入 `output.output_dir/<run_prefix>_<data_stem>_<timestamp>/`；默认启用，`output.timestamp_subdir: 0` 可关闭）**
   - 全局 SHAP summary：`output.summary_file`（默认 `gw_shap_summary.png`）
   - 全局 Mean(|SHAP|) 图：`output.mean_abs_shap_file`（代码缺省 `mean_abs_shap.png`；配置可不写）
   - Dependence：`output.dependence_prefix + <feature>.png`
   - 交互对 CSV：`output.interaction_pairs_file`
   - 日志：`output.log_file`（默认 `run_log.txt`，同时输出到控制台与文件）
+  - 说明：默认开启 `output.capture_prints: 1`，将控制台 stdout/stderr 一并写入日志文件，便于复盘。
   - GeoXGBoost 带宽优化结果：`BW_results.csv`（由 `geoxgboost.optimize_bw` 写出）
   - GeoXGBoost 本地模型结果：`LW_GXGB.xlsx`（由 `geoxgboost.gxgb` 写出）
 
@@ -117,7 +130,7 @@ python .\Code\gwxgb\gwxgb_shap.py -c .\Code\gwxgb\gwxgb_config.yaml
 - `model`: `random_state` / `test_size` / `params`（XGBRegressor 参数）
 - `cv`: `use_cv` / `n_splits` / `random_state`
 - `shap`: summary/dependence/interaction 相关开关与参数
-- `output`: `output_dir` / `timestamp_subdir` / `timestamp_format` / `run_prefix` / `log_file` / `summary_file` / `dependence_prefix` / `interaction_prefix` / `interaction_pairs_file`（可选 `model_file`）
+- `output`: `output_dir` / `timestamp_subdir` / `timestamp_format` / `run_prefix` / `include_data_name` / `data_name_max_len` / `log_file` / `capture_prints` / `summary_file` / `dependence_prefix` / `interaction_prefix` / `interaction_pairs_file`（可选 `model_file`）
 - `tuning`: 嵌套 CV 调参用（仅 `xgb_nestedcv_tune.py` 读取）
 
 ### `Code/gwxgb/gwxgb_config.yaml`
@@ -132,4 +145,4 @@ python .\Code\gwxgb\gwxgb_shap.py -c .\Code\gwxgb\gwxgb_config.yaml
 1. **路径相对性**：`xgb_shap.py` 已将 `data.path` / `output.output_dir` 的相对路径按“配置文件所在目录”解析（不再依赖运行时 `cd`）。
 2. **YAML 中的历史路径**：`Code/xgb/config.yaml`、`Code/gwxgb/gwxgb_config.yaml` 已按当前 `Data/` 与 `Output/` 目录结构修正默认路径。
 3. **Demo 绝对路径**：`test/` 下两份 `GXGB_call_demo.py` 已改为按脚本目录读取 `Coords.csv` / `Data.csv`，避免机器路径不一致导致无法运行。
-4. **运行产物隔离**：默认开启 `output.timestamp_subdir: 1`，每次运行会在 `output.output_dir` 下创建时间戳子目录，避免覆盖历史结果；日志同目录落盘。
+4. **运行产物隔离**：默认开启 `output.timestamp_subdir: 1`，每次运行会在 `output.output_dir` 下创建 `run_prefix + 数据名 + 时间戳` 子目录，避免覆盖历史结果；日志同目录落盘。

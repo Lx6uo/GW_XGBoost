@@ -25,15 +25,14 @@ model:
   # 训练/测试划分中的测试集比例
   test_size: 0.2
   params:
-    n_estimators: 500
-    learning_rate: 0.2
-    max_depth: 4
-    min_child_weight: 5
-    gamma: 0.05
-    subsample: 0.6
-    colsample_bytree: 0.7
-    reg_alpha: 0.02
-    reg_lambda: 2
+    n_estimators: 300
+    learning_rate: 0.05
+    max_depth: 3
+    min_child_weight: 8
+    subsample: 0.8
+    colsample_bytree: 1
+    reg_alpha: 0.1
+    reg_lambda: 1
     # 其他 XGBoost 参数后续
 
 cv:
@@ -51,9 +50,12 @@ shap:
   # - xgboost: 强制使用 xgboost Booster.predict(pred_contribs/pred_interactions)
   engine: "auto"
   # 是否生成 SHAP summary 图（0/1）
-  use_summary: 1
+  use_summary: 0
   # 是否生成 SHAP dependence 图（0/1）
   use_dependence: 1
+  # 是否对所有特征都输出单独的 dependence 图（0/1）
+  # - 若为 1，则忽略 dependence_top_n（但仍会尊重 dependence_features）
+  dependence_all: 1
   # 交互作用图基准特征，例如 "x2"
   interaction_base: "x2"
   # 与基准特征绘制交互作用图的特征列表，例如 ["x3", "x5"]
@@ -76,8 +78,14 @@ output:
   timestamp_format: "%Y%m%d_%H%M%S"
   # 子目录名前缀（可选；不填则脚本默认用 xgb_）
   run_prefix: "xgb_"
+  # 是否在子目录名中附加输入数据文件名（0/1；默认 1）
+  include_data_name: 1
+  # 输入数据文件名的最大长度（避免路径过长）；0 表示不截断
+  data_name_max_len: 40
   # 日志文件名（保存到本次运行 output 子目录下）
   log_file: "run_log.txt"
+  # 是否将 stdout/stderr（含 print 输出）一并写入日志文件（0/1）
+  capture_prints: 1
   # 已有模型文件名（可选）
   # model_file: "xgb_model.json"
   # SHAP summary 图文件名
@@ -96,41 +104,58 @@ tuning:
   use_nested_cv: 1
   # 内层 GridSearch 的评分指标（默认 r2；也可设为 neg_root_mean_squared_error 等）
   scoring: "r2"
+  # GridSearchCV 的 verbose（0=静默；1=打印总 fits；2=打印每个 fit；越大越啰嗦）
+  grid_verbose: 1
+  # （可选）early stopping（仅影响调参阶段）
+  # - 实现方式：在每个 CV fold 的训练集内再切一份 eval_set 用于 early stopping
+  # - 注意：n_estimators 变成“上限”，通常建议设大一些/或从搜索网格中移除 n_estimators
+  early_stopping:
+    enabled: 0
+    rounds: 50
+    eval_fraction: 0.2
+    eval_metric: "rmse"
+    min_train_samples: 20
   # 推荐写法：直接提供 param_grid（可同时搜索多个参数）。
   # 你可以注释掉某一行（例如 "# - 500"）来跳过某个取值，也可以注释掉整个参数块来不搜索该参数。
   param_grid:
-    n_estimators: # 树的数量
-      - 100
-      - 200
-      - 300
-      - 500
-    max_depth: # 树的最大深度
-      - 3
-      - 4
-      - 5
-      - 6
-      - 7
-    learning_rate: # 学习率
-      - 0.01
-      - 0.05
-      - 0.1
-      - 0.2
-    min_child_weight: # 叶子节点最小样本权重和 (防过拟合)
-      - 1
-      - 3
-      - 5
-    gamma: # 节点分裂所需的最小损失下降
-      - 0.05
-      - 0.1
-      - 0.2
+    # n_estimators: # 树的数量
+    #   - 200
+    #   - 300
+    #   - 400
+    #   - 600
+    # max_depth: # 树的最大深度
+    #   - 2
+    #   - 3
+    #   - 4
+    #   - 5
+    # learning_rate: # 学习率
+    #   - 0.05
+    #   - 0.1
+    # min_child_weight: # 叶子节点最小样本权重和 (防过拟合)
+    #   - 6
+    #   - 8
+    #   - 10
+    #   - 12
     # subsample: # 样本采样率
+    #   - 0.4
     #   - 0.6
     #   - 0.8
-    #   - 1.0
     # colsample_bytree: # 特征采样率
     #   - 0.6
     #   - 0.8
     #   - 1.0
+    reg_alpha: 
+      - 0.001
+      - 0.01
+      - 0.02
+      - 0.05
+      - 0.1
+
+    reg_lambda: 
+      - 1
+      - 2
+      - 5
+      - 10
 
   # 旧格式（最多同时调 3 个超参数）：如果不使用 param_grid，可用 param1/param2/param3。
   # 最多同时调 3 个超参数；名称需与 model.params 中的 key 一致

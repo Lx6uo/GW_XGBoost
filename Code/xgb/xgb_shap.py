@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import datetime
 import logging
 from pathlib import Path
@@ -140,7 +141,7 @@ def load_dataset(config: Dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame, pd
                 .replace({"nan": np.nan, "None": np.nan, "": np.nan})
             )
             df[col] = pd.to_numeric(series_cleaned)
-            print(f"已自动将列 `{col}` 中的字符串数值转换为数字。")
+            logging.info(f"已自动将列 `{col}` 中的字符串数值转换为数字。")
         except (ValueError, TypeError):
             # 转换失败，说明可能不是纯数字/百分号列（例如真正的类别文本），跳过
             continue
@@ -178,13 +179,13 @@ def cross_validate_model(config: Dict[str, Any], X: pd.DataFrame, y: pd.Series) 
     n_splits = int(cv_cfg.get("n_splits", 5))
     n_samples = len(X)
     if n_samples == 0:
-        print("交叉验证: 数据为空，跳过。")
+        logging.info("交叉验证: 数据为空，跳过。")
         return
     if n_splits < 2:
-        print("交叉验证: `cv.n_splits` 必须 >= 2，当前将跳过。")
+        logging.info("交叉验证: `cv.n_splits` 必须 >= 2，当前将跳过。")
         return
     if n_splits > n_samples:
-        print(
+        logging.info(
             f"交叉验证: `cv.n_splits`({n_splits}) 大于样本数({n_samples})，将跳过。"
         )
         return
@@ -201,7 +202,7 @@ def cross_validate_model(config: Dict[str, Any], X: pd.DataFrame, y: pd.Series) 
         current = stop
 
     metrics = []
-    print(f"开始 {n_splits} 折交叉验证:")
+    logging.info(f"开始 {n_splits} 折交叉验证:")
     for i in range(n_splits):
         val_idx = folds[i]
         train_idx = np.concatenate([folds[j] for j in range(n_splits) if j != i])
@@ -225,13 +226,13 @@ def cross_validate_model(config: Dict[str, Any], X: pd.DataFrame, y: pd.Series) 
         ss_tot = float(np.sum((y_true_arr - np.mean(y_true_arr)) ** 2))
         r2 = float("nan") if ss_tot == 0.0 else 1.0 - ss_res / ss_tot
         metrics.append((rmse, mae, nrmse, r2))
-        print(
+        logging.info(
             f"折 {i + 1}/{n_splits} - 验证集 "
             f"RMSE: {rmse:.4f}, MAE: {mae:.4f}, NRMSE: {nrmse:.4f}, R^2: {r2:.4f}"
         )
 
     rmses, maes, nrmse_s, r2s = zip(*metrics)
-    print(
+    logging.info(
         f"{n_splits} 折交叉验证结果 - "
         f"RMSE 平均: {np.mean(rmses):.4f}, RMSE 标准差: {np.std(rmses):.4f}, "
         f"MAE 平均: {np.mean(maes):.4f}, MAE 标准差: {np.std(maes):.4f}, "
@@ -281,7 +282,7 @@ def compute_shap_and_interactions(
 
     except Exception as exc:
         # shap.TreeExplainer 失败时，回退到 xgboost 原生的 pred_contribs / pred_interactions。
-        print(
+        logging.warning(
             "警告: shap.TreeExplainer 初始化失败，将回退到 xgboost 原生 SHAP 计算。"
             f"原因: {exc}"
         )
@@ -305,21 +306,45 @@ def ensure_output_dir(config: Dict[str, Any]) -> Path:
 
 def _sanitize_subdir_name(name: str) -> str:
     # Windows/macOS/Linux 通用：保留字母数字 + 少量安全字符，其余替换为 '-'
-    safe_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
-    cleaned = "".join(ch if ch in safe_chars else "-" for ch in str(name))
+    safe_chars = set("-_.")
+    cleaned = "".join(ch if (ch.isalnum() or ch in safe_chars) else "-" for ch in str(name))
     cleaned = cleaned.strip(" .-_")
     return cleaned or "run"
+
+
+def _sanitize_subdir_part(part: str) -> str:
+    """用于子目录命名的“片段”清洗：空片段保持为空（不回退到 'run'）。"""
+    safe_chars = set("-_.")
+    cleaned = "".join(
+        ch if (ch.isalnum() or ch in safe_chars) else "-" for ch in str(part)
+    )
+    return cleaned.strip(" .-_")
+
+
+def _dataset_stem_from_config(config: Dict[str, Any]) -> str:
+    data_cfg = config.get("data")
+    if not isinstance(data_cfg, dict):
+        return ""
+    path_value = data_cfg.get("path")
+    if not path_value:
+        return ""
+    try:
+        return Path(str(path_value)).stem
+    except Exception:
+        return ""
 
 
 def ensure_run_output_dir(config: Dict[str, Any], *, prefix: str = "") -> Path:
     """按运行时间创建独立输出目录，并将 config.output.output_dir 指向该目录。
 
     - base 输出目录来自 `output.output_dir`
-    - run 子目录默认名：`<run_prefix><timestamp>`
+    - run 子目录默认名：`<run_prefix>_<data_stem>_<timestamp>`（默认会尝试从 `data.path` 推断 data_stem）
     - 可通过以下配置覆盖：
       - output.timestamp_subdir: 0/1（默认 1）
       - output.timestamp_format: str（默认 "%Y%m%d_%H%M%S"）
       - output.run_prefix: str（默认使用函数参数 prefix）
+      - output.include_data_name: 0/1（默认 1）
+      - output.data_name_max_len: int（默认 40；0 表示不截断）
     """
     if isinstance(config.get("_run_output_dir"), str) and config["_run_output_dir"]:
         return Path(config["_run_output_dir"])
@@ -340,7 +365,17 @@ def ensure_run_output_dir(config: Dict[str, Any], *, prefix: str = "") -> Path:
     timestamp_format = str(output_cfg.get("timestamp_format", "%Y%m%d_%H%M%S"))
     run_prefix = str(output_cfg.get("run_prefix") or prefix or "")
     ts = datetime.datetime.now().strftime(timestamp_format)
-    subdir = _sanitize_subdir_name(f"{run_prefix}{ts}")
+
+    include_data_name = int(output_cfg.get("include_data_name", 1)) == 1
+    data_stem = _dataset_stem_from_config(config) if include_data_name else ""
+    data_part = _sanitize_subdir_part(data_stem)
+    max_len = int(output_cfg.get("data_name_max_len", 40))
+    if max_len > 0 and len(data_part) > max_len:
+        data_part = data_part[:max_len]
+
+    prefix_part = _sanitize_subdir_part(run_prefix).rstrip(" .-_")
+    parts = [p for p in (prefix_part, data_part, ts) if p]
+    subdir = _sanitize_subdir_name("_".join(parts))
 
     candidate = base_output_dir / subdir
     if candidate.exists():
@@ -356,27 +391,58 @@ def ensure_run_output_dir(config: Dict[str, Any], *, prefix: str = "") -> Path:
     return run_output_dir
 
 
+class _TeeStream:
+    def __init__(self, primary: Any, secondary: Any) -> None:
+        self._primary = primary
+        self._secondary = secondary
+
+    def write(self, data: str) -> int:
+        self._primary.write(data)
+        self._secondary.write(data)
+        return len(data)
+
+    def flush(self) -> None:
+        self._primary.flush()
+        self._secondary.flush()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._primary, name)
+
+
 def setup_logging(config: Dict[str, Any], output_dir: Path) -> None:
     """配置日志记录，将日志同时输出到控制台和文件。"""
     output_cfg = config.get("output") or {}
     log_file = output_cfg.get("log_file", "run_log.txt")
     log_path = output_dir / str(log_file)
 
+    orig_stdout = sys.stdout
+    orig_stderr = sys.stderr
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
             logging.FileHandler(log_path, encoding="utf-8"),
-            logging.StreamHandler(sys.stdout),
+            logging.StreamHandler(orig_stdout),
         ],
         force=True,
     )
     logging.info("=" * 50)
     logging.info(f"本次运行开始: {datetime.datetime.now()}")
+    logging.info(f"命令行: {' '.join(sys.argv)}")
     logging.info(f"输出目录: {output_dir.resolve()}")
     config_path = config.get("_config_path")
     if config_path:
         logging.info(f"配置文件: {config_path}")
+
+    # 捕获所有 print / 第三方库 stdout/stderr 输出到同一个日志文件，便于复盘长时间运行
+    capture_prints = int(output_cfg.get("capture_prints", 1)) == 1
+    if capture_prints:
+        log_stream = log_path.open("a", encoding="utf-8")
+        atexit.register(log_stream.close)
+        sys.stdout = _TeeStream(orig_stdout, log_stream)
+        sys.stderr = _TeeStream(orig_stderr, log_stream)
+        logging.info("已启用 stdout/stderr 捕获到日志文件。")
 
 
 def save_model_if_requested(
@@ -390,7 +456,7 @@ def save_model_if_requested(
     model_path = output_dir / model_file
     booster = model.get_booster()
     booster.save_model(model_path)
-    print(f"模型已保存到: {model_path}")
+    logging.info(f"模型已保存到: {model_path}")
 
 
 def evaluate_full_model(
@@ -400,7 +466,7 @@ def evaluate_full_model(
     config: Dict[str, Any],
     output_dir: Path,
 ) -> None:
-    """在全量数据上评估模型"""
+    """在全量数据上评估模型（in-sample；仅用于参考，不代表泛化能力）。"""
     y_true = np.asarray(y, dtype=float)
     y_pred = model.predict(X)
     y_pred_arr = np.asarray(y_pred, dtype=float)
@@ -415,8 +481,10 @@ def evaluate_full_model(
     ss_tot = float(np.sum((y_true - np.mean(y_true)) ** 2))
     r2 = float("nan") if ss_tot == 0.0 else 1.0 - ss_res / ss_tot
 
-    print("全量数据模型评估指标:")
-    print(f"RMSE: {rmse:.4f}, MAE: {mae:.4f}, NRMSE: {nrmse:.4f}, R^2: {r2:.4f}")
+    logging.info(
+        "训练内（全量数据 / in-sample）评估指标: "
+        f"RMSE: {rmse:.4f}, MAE: {mae:.4f}, NRMSE: {nrmse:.4f}, R^2: {r2:.4f}"
+    )
 
     # 这里只打印全量数据上的指标，不再生成图像文件。
 
@@ -430,12 +498,12 @@ def holdout_evaluate_model(
     model_cfg = config.get("model") or {}
     test_size = float(model_cfg.get("test_size", 0.3))
     if test_size <= 0.0 or test_size >= 1.0:
-        print("Hold-out: 跳过，因为 `model.test_size` 配置无效。")
+        logging.info("Hold-out: 跳过，因为 `model.test_size` 配置无效。")
         return
 
     n_samples = len(X)
     if n_samples < 3:
-        print("Hold-out: 样本数过少，跳过 7:3 划分评估。")
+        logging.info("Hold-out: 样本数过少，跳过 7:3 划分评估。")
         return
 
     random_state = int(model_cfg.get("random_state", 42))
@@ -504,23 +572,22 @@ def holdout_evaluate_model(
 
     train_ratio = (n_samples - n_test) / n_samples
     test_ratio = n_test / n_samples
-    print(
-        f"Hold-out 评估（训练集比例约为 {train_ratio:.2f}，测试集比例约为 {test_ratio:.2f}）："
-    )
-    print(f"二分类阈值（基于训练集 y 中位数）: {cls_threshold:.4f}")
-    print(
+    r2_gap = r2_tr - r2_te if (np.isfinite(r2_tr) and np.isfinite(r2_te)) else float("nan")
+    if np.isfinite(r2_gap) and r2_gap >= 0.05:
+        logging.warning(
+            "检测到较大的 Train/Test 泛化差距（可能过拟合或数据分布差异）："
+            f"R^2 gap = {r2_gap:.4f}（Train={r2_tr:.4f}, Test={r2_te:.4f}）。"
+        )
+    logging.info(
+        "Hold-out 评估（Train 为训练集 in-sample 指标，仅供参考；请以 Test/CV 为准；"
+        f"训练集比例约为 {train_ratio:.2f}，测试集比例约为 {test_ratio:.2f}）：\n"
+        f"二分类阈值（基于训练集 y 中位数）: {cls_threshold:.4f}\n"
         f"Train - RMSE: {rmse_tr:.4f}, MAE: {mae_tr:.4f}, "
-        f"NRMSE: {nrmse_tr:.4f}, R^2: {r2_tr:.4f}"
-    )
-    print(
+        f"NRMSE: {nrmse_tr:.4f}, R^2: {r2_tr:.4f}\n"
         f"Test  - RMSE: {rmse_te:.4f}, MAE: {mae_te:.4f}, "
-        f"NRMSE: {nrmse_te:.4f}, R^2: {r2_te:.4f}"
-    )
-    print(
+        f"NRMSE: {nrmse_te:.4f}, R^2: {r2_te:.4f}\n"
         f"Train - Accuracy: {acc_tr:.4f}, Precision: {prec_tr:.4f}, "
-        f"Recall: {rec_tr:.4f}, F1: {f1_tr:.4f}"
-    )
-    print(
+        f"Recall: {rec_tr:.4f}, F1: {f1_tr:.4f}\n"
         f"Test  - Accuracy: {acc_te:.4f}, Precision: {prec_te:.4f}, "
         f"Recall: {rec_te:.4f}, F1: {f1_te:.4f}"
     )
@@ -544,7 +611,7 @@ def plot_shap_summary(
     plt.tight_layout()
     plt.savefig(summary_path, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"SHAP summary plot saved to: {summary_path}")
+    logging.info(f"SHAP summary plot saved to: {summary_path}")
 
     # mean |SHAP| bar 图
     mean_abs_shap = np.mean(np.abs(shap_values), axis=0)
@@ -563,7 +630,7 @@ def plot_shap_summary(
     bar_path = output_dir / bar_file
     plt.savefig(bar_path, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"Mean |SHAP| bar plot saved to: {bar_path}")
+    logging.info(f"Mean |SHAP| bar plot saved to: {bar_path}")
 
 
 def select_dependence_features(
@@ -573,6 +640,10 @@ def select_dependence_features(
     features_cfg: Optional[List[str]] = shap_cfg.get("dependence_features")
     if features_cfg:
         return [f for f in features_cfg if f in X.columns]
+
+    dependence_all = int(shap_cfg.get("dependence_all", 0)) == 1
+    if dependence_all:
+        return [str(c) for c in X.columns]
 
     top_n = int(shap_cfg.get("dependence_top_n", 5))
     mean_abs_shap = np.mean(np.abs(shap_values), axis=0)
@@ -594,39 +665,54 @@ def plot_shap_dependence(
 
     features = select_dependence_features(shap_values, X, shap_cfg)
     if not features:
-        print("未选中任何特征来绘制 SHAP 依赖图。")
+        logging.info("未选中任何特征来绘制 SHAP 依赖图。")
         return
 
     for feature in features:
-        plt.figure()
-        shap.dependence_plot(feature, shap_values, X, show=False)
+        try:
+            plt.figure()
+            shap.dependence_plot(feature, shap_values, X, show=False)
 
-        # 计算并叠加一条平滑曲线
-        idx = X.columns.get_loc(feature)
-        x = X[feature].to_numpy(dtype=float)
-        y = shap_values[:, idx]
-        order = np.argsort(x)
-        x_sorted = x[order]
-        y_sorted = y[order]
-        n = len(x_sorted)
-        if n >= 5:
-            window = max(11, n // 5)
-            y_smooth = (
-                pd.Series(y_sorted)
-                .rolling(window, center=True, min_periods=1)
-                .mean()
-                .to_numpy()
+            # 计算并叠加一条平滑曲线（若无法转换为数值则跳过）
+            idx = X.columns.get_loc(feature)
+            y = np.asarray(shap_values[:, idx], dtype=float)
+            try:
+                x_num = (
+                    pd.to_numeric(X[feature], errors="coerce")
+                    .to_numpy(dtype=float, copy=False)
+                )
+                mask = np.isfinite(x_num) & np.isfinite(y)
+                if int(mask.sum()) >= 5:
+                    x_use = x_num[mask]
+                    y_use = y[mask]
+                    order = np.argsort(x_use)
+                    x_sorted = x_use[order]
+                    y_sorted = y_use[order]
+                    n = len(x_sorted)
+                    window = max(11, n // 5)
+                    y_smooth = (
+                        pd.Series(y_sorted)
+                        .rolling(window, center=True, min_periods=1)
+                        .mean()
+                        .to_numpy()
+                    )
+                    plt.plot(x_sorted, y_smooth, color="red")
+            except Exception:
+                pass
+
+            plt.xlabel(feature)
+            plt.ylabel("SHAP value")
+            safe_feature = feature.replace("/", "_").replace("\\", "_")
+            dep_path = output_dir / f"{prefix}{safe_feature}.png"
+            plt.tight_layout()
+            plt.savefig(dep_path, dpi=300, bbox_inches="tight")
+            plt.close()
+            logging.info(f"SHAP dependence plot for `{feature}` saved to: {dep_path}")
+        except Exception as exc:
+            plt.close("all")
+            logging.warning(
+                f"SHAP dependence plot for `{feature}` failed and was skipped. Reason: {exc}"
             )
-            plt.plot(x_sorted, y_smooth, color="red")
-
-        plt.xlabel(feature)
-        plt.ylabel("SHAP value")
-        safe_feature = feature.replace("/", "_").replace("\\", "_")
-        dep_path = output_dir / f"{prefix}{safe_feature}.png"
-        plt.tight_layout()
-        plt.savefig(dep_path, dpi=300, bbox_inches="tight")
-        plt.close()
-        print(f"SHAP dependence plot for `{feature}` saved to: {dep_path}")
 
 
 def summarize_and_save_interactions(
@@ -663,17 +749,17 @@ def summarize_and_save_interactions(
     df_top = df_pairs.head(top_n)
 
     top_array = df_top[["feature_1", "feature_2", "mean_abs_interaction"]].values.tolist()
-    print(
+    logging.info(
         "Top SHAP interaction pairs "
-        "[feature_1, feature_2, mean_abs_interaction]:"
+        "[feature_1, feature_2, mean_abs_interaction]: "
+        f"{top_array}"
     )
-    print(top_array)
 
     output_cfg = config.get("output") or {}
     filename = output_cfg.get("interaction_pairs_file", "shap_interactions.csv")
     path = output_dir / filename
     df_top.to_csv(path, index=False, encoding="utf-8-sig")
-    print(
+    logging.info(
         f"Top {len(df_top)} SHAP interaction pairs "
         f"saved to: {path}"
     )
@@ -744,32 +830,28 @@ def plot_fixed_base_interactions(
         plt.tight_layout()
         plt.savefig(path, dpi=300, bbox_inches="tight")
         plt.close()
-        print(
+        logging.info(
             f"SHAP interaction plot for `{base_feature}` and `{other}` saved to: {path}"
         )
 
 
 def main() -> None:
     """脚本主入口，执行训练、评估和 SHAP 分析流程。"""
+    run_start = datetime.datetime.now()
     args = parse_args()
     if args.config:
         config_path = Path(args.config)
     else:
         config_path = Path(__file__).with_name("config.yaml")
-        print(f"未指定配置文件路径，将使用默认配置文件: {config_path}")
 
     config = load_config(config_path)
 
     output_dir = ensure_run_output_dir(config, prefix="xgb_")
     setup_logging(config, output_dir)
+    logging.info(f"配置内容: {config}")
 
-    print(f"使用配置文件: {config_path}")
     logging.info(f"使用配置文件: {config_path}")
     df, X, y = load_dataset(config)
-    print(
-        f"已加载数据 `{config['data']['path']}`，"
-        f"共 {df.shape[0]} 行，{df.shape[1]} 列。"
-    )
     logging.info(
         f"已加载数据 `{config['data']['path']}`，"
         f"共 {df.shape[0]} 行，{df.shape[1]} 列。"
@@ -782,7 +864,6 @@ def main() -> None:
     shap_values, interaction_values = compute_shap_and_interactions(
         model_full, X, config
     )
-    print("已在全量数据上训练模型并计算 SHAP 值。")
     logging.info("已在全量数据上训练模型并计算 SHAP 值。")
 
     evaluate_full_model(model_full, X, y, config, output_dir)
@@ -793,8 +874,11 @@ def main() -> None:
 
     save_model_if_requested(model_full, config, output_dir)
 
-    print(f"所有输出文件已保存到目录: {output_dir.resolve()}")
     logging.info(f"所有输出文件已保存到目录: {output_dir.resolve()}")
+    run_end = datetime.datetime.now()
+    logging.info(
+        f"本次运行结束: {run_end}（耗时 {(run_end - run_start).total_seconds():.2f} 秒）"
+    )
 
 
 if __name__ == "__main__":

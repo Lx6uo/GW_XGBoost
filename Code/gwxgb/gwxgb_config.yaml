@@ -1,6 +1,8 @@
 data:
   # CSV data path
-  path: "../../Data/年份终市级指标数据（5年截面）/终市级指标数据_with_latlon_2005.csv"
+  path: "../../Data/年份终市级指标数据（5年截面）/终市级指标数据_with_latlon_2022.csv"
+  # 城市名列（用于局部模型输出表格中附加城市名；若不写则尝试自动检测）
+  city_col: "城市"
   # Dependent variable (target)
   target:  "co2总量（万吨）"
   # Feature columns (excluding target and coords)
@@ -14,7 +16,7 @@ data:
     "总人口（万人）",
     "城镇化率",
     "能源结构",
-    "气候区",
+    # "气候区",  --- IGNORE ---  # 气候区是分类变量，暂不纳入特征列表（后续可考虑编码后加入）
     "单位面积建材碳排放（kgco2/m2)"
     ]
   # Coordinate columns (e.g. longitude, latitude) — 请按实际字段名修改
@@ -25,15 +27,14 @@ data:
 model:
   # XGBoost hyperparameters used inside GeoXGBoost
   params:
-    n_estimators: 100 #default is 100   树的数量，默认100
-    learning_rate: 0.1 #default is 0.3   学习率，默认0.3
-    max_depth: 4 #default is 4     树的最大深度，默认4
-    min_child_weight: 3  #default is 3     叶子节点最小样本权重和，默认3
-    gamma: 0.05 #default is 0     节点分裂所需的最小损失下降，默认0
-    subsample: 0.6 #default is 1     行采样比例（样本子采样），默认1
-    colsample_bytree: 0.8 #default is 1     列采样比例（特征子采样），默认1
-    reg_alpha: 0 #default is 0     L1 正则化系数，默认0
-    reg_lambda: 1 #default is 1     L2 正则化系数，默认1
+      n_estimators: 300
+      learning_rate: 0.05
+      max_depth: 3
+      min_child_weight: 8
+      subsample: 0.8
+      colsample_bytree: 1
+      reg_alpha: 0.1
+      reg_lambda: 1
   random_state: 42
 
 grid_search:
@@ -60,15 +61,15 @@ gw:
   # Bandwidth:
   # for Adaptive kernel = number of nearest neighbours;
   # for Fixed = distance threshold
-  bw: 78
+  bw: 115
   # Whether to optimize bw automatically (0/1)
-  optimize_bw: 1
+  optimize_bw: 0
   # Optional search range for bw optimization; if omitted, a default range around `bw` is used.
   # - Adaptive: integers (neighbour count)
   # - Fixed: floats (distance threshold)
-  bw_min: 40
-  bw_max: 100
-  bw_step: 10
+  bw_min: 80
+  bw_max: 140
+  bw_step: 5
   # "Adaptive" or "Fixed"
   kernel: "Adaptive"
   # Whether to use spatial weights matrix
@@ -80,7 +81,7 @@ gw:
   # Alpha weight value between 0 and 1
   alpha_wt: 1.0
   # Test size used inside geoxgboost (for internal evaluation)
-  test_size: 0.3
+  test_size: 0.2
   seed: 7
   n_splits: 5
 
@@ -94,6 +95,9 @@ shap:
   use_summary: 1
   # Whether to draw SHAP dependence plots (0/1)
   use_dependence: 1
+  # 是否对所有特征都输出单独的 dependence 图（0/1）
+  # - 若为 1，则忽略 dependence_top_n（但仍会尊重 dependence_features）
+  dependence_all: 1
   # Interaction plots: base feature and with-features
   # interaction_base: "x2"
   # interaction_with: ["x3", "x5"]
@@ -114,6 +118,12 @@ output:
   timestamp_format: "%Y%m%d_%H%M%S"
   # 子目录名前缀（可选；不填则脚本默认用 gwxgb_）
   run_prefix: "gwxgb_"
+  # 是否在子目录名中附加输入数据文件名（0/1；默认 1）
+  include_data_name: 1
+  # 输入数据文件名的最大长度（避免路径过长）；0 表示不截断
+  data_name_max_len: 40
+  # 是否将 stdout/stderr（含 print 输出）一并写入日志文件（0/1）
+  capture_prints: 1
   # SHAP summary plot filename
   summary_file: "gw_shap_summary.png"
   # SHAP dependence plot filename prefix
@@ -131,6 +141,14 @@ local_shap:
   # 是否对每一个局部 GXGB 模型输出 SHAP（0/1）
   # 注意：开启后会生成大量图片，并显著增加运行时间
   enabled: 1
+  # 局部模型用于 SHAP 的来源：
+  # - oob: 使用 geoxgboost 输出的 bestLocalModel（训练时不包含中心点；更接近 R2_oob）
+  # - in_sample: 每个局部模型在导出阶段重新训练一次（训练集包含中心点；更接近 R2_Pred，偏乐观）
+  model_variant: "in_sample"
+  # 仅在 model_variant=in_sample 时生效：是否在重新训练时使用空间权重（0/1）
+  # - 设为 0 可更接近 geoxgboost 里用于计算 LM_yPred 的 modelFull（其 fit 未传 sample_weight）
+  # - 设为 1 则使用 bi-square 权重；中心点距离=0，权重为 1
+  in_sample_use_spatial_weights: 1
   # 输出子目录（位于 output.output_dir 下）
   output_subdir: "local_shap"
   # summary 图保存目录（位于 output_subdir 下）
@@ -141,6 +159,11 @@ local_shap:
   save_shap_csv: 1
   # CSV 文件名（位于 output_subdir 下）
   csv_file: "local_shap_values.csv"
+  # 是否输出“每个局部模型一列”的特征重要性汇总表（0/1）
+  # - 每个局部模型一行；每个特征一列（值为 mean(|SHAP|)）
+  save_feature_importance_table: 1
+  # 特征重要性汇总表文件名（位于 output_subdir 下）
+  feature_importance_file: "local_feature_importance_wide.csv"
   # 最多处理多少个局部模型；0 表示全部（用于快速验证）
   max_models: 0
   # 日志输出频率（每处理多少个模型打一次进度）；0 表示不输出
