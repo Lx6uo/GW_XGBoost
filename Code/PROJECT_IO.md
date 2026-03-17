@@ -11,6 +11,7 @@ cd .\Code
 uv sync
 uv run python .\xgb\xgb_shap.py -c .\xgb\config.yaml
 uv run python .\xgb\feature_corr_heatmap.py -c .\xgb\config.yaml
+uv run python .\xgb\normalize_feature_table.py -c .\xgb\config.yaml
 uv run python .\xgb\xgb_gridcv_tune.py -c .\xgb\config.yaml
 uv run python .\gwxgb\gwxgb_shap.py -c .\gwxgb\gwxgb_config.yaml
 ```
@@ -62,7 +63,23 @@ uv run python .\gwxgb\gwxgb_shap.py -c .\gwxgb\gwxgb_config.yaml
   - 热力图 PNG：`feature_correlation_<method>.png`
   - 日志：`output.log_file`（默认 `run_log.txt`）
 
-### E) `xgb/xgb_gridcv_tune.py`（单层 GridSearchCV：候选组合排行榜）
+### E) `xgb/normalize_feature_table.py`（数据预处理：绝对值特征 min-max 归一化）
+
+- **配置**：`xgb/config.yaml` 中的 `preprocess_normalize.*`
+- **输入**
+  - 数据：`data.path`
+  - 特征范围：默认读取 `data.features`；也可用 `preprocess_normalize.include_features` 单独指定
+  - 排除名单：`preprocess_normalize.exclude_features`（适合填写已经是比例/比率/人均/单位面积等相对量的特征）
+- **输出**（写入 `output.output_dir/<run_prefix>_<data_stem>_<timestamp>/<preprocess_normalize.output_subdir>/`）
+  - 归一化后的整表：`normalized_feature_table.csv`
+  - 归一化清单：`normalized_feature_manifest.csv`
+  - 日志：`output.log_file`（默认 `run_log.txt`）
+- **说明**
+  - 当前脚本采用按列 `min-max` 归一化：`(x - min) / (max - min)`
+  - 保留原表所有列，只替换被归一化的特征列；目标列 `data.target` 不参与归一化
+  - 若某个特征是常数列，则该列输出为 0，并在 manifest 中标记为 `constant_zero`
+
+### F) `xgb/xgb_gridcv_tune.py`（单层 GridSearchCV：候选组合排行榜）
 
 - **配置**：`xgb/config.yaml`（读取 `tuning.param_grid` / `tuning.scoring` / `tuning.cv_splits` / `tuning.grid_verbose` / `tuning.early_stopping.*`）
 - **输入**：同 `xgb_shap.py`
@@ -71,7 +88,38 @@ uv run python .\gwxgb\gwxgb_shap.py -c .\gwxgb\gwxgb_config.yaml
   - 日志：`output.log_file`（默认 `run_log.txt`，默认会打印候选排行；可用 `--top` 限制打印条数）
   - 注意：该脚本适合“选参”；best_score 往往偏乐观，不能等价为最终泛化性能
 
-### F) `gwxgb/gwxgb_shap.py`（GeoXGBoost + 带宽优化 + 全局 SHAP）
+### G) `xgb/xgb_shap_robustness.py`（归因优先的 SHAP 稳健性分析）
+
+- **配置**：`xgb/config.yaml` 中的 `attribution.*`
+- **输入**
+  - 基础数据：仍读取 `data.path` / `data.target` / `data.features`
+  - 额外特征：若 `attribution.categorical_features` 或 `attribution.continuous_features` 中声明了不在 `data.features` 的列，但这些列存在于原始 CSV，则脚本会自动补入本次归因分析（例如 `气候区`）
+  - 候选口径：`attribution.candidate_specs`
+  - 稳定性评估：`attribution.cv_repeats` / `attribution.cv_splits` / `attribution.cv_seeds` / `attribution.top_k`
+  - 正式口径筛选约束：`attribution.baseline_spec` / `attribution.performance_r2_drop_tolerance` / `attribution.performance_rmse_rise_tolerance` / `attribution.spearman_tie_tolerance`
+- **输出**（写入 `output.output_dir/<run_prefix>_<data_stem>_<timestamp>/<attribution.output_subdir>/`）
+  - 每个 repeat/fold 的验证集指标：`attribution_fold_metrics.csv`
+  - 每个 repeat/fold 的验证集 SHAP 重要性：`attribution_fold_shap_importance.csv`
+  - 各方案按特征汇总的稳定性结果：`feature_stability_by_spec.csv`
+  - 各方案总体稳健性汇总：`robustness_summary.csv`
+  - 变换与编码清单：`transform_manifest.csv`
+  - 正式推荐口径的特征相对重要性：`official_relative_importance.csv`
+  - 推荐说明：`recommendation.txt`
+  - 图像输出（默认位于 `<attribution.output_subdir>/<attribution.plots_dir>/`）
+    - 每个方案的 SHAP summary 图：`shap_summary_<中文预处理名>.png`
+    - 每个方案的 Top 特征相对重要性：`top_features_<中文预处理名>.png`
+    - 各方案相对重要性热力图：`spec_comparison_importance_share_heatmap.png`
+    - 各方案中位排名热力图：`spec_comparison_rank_heatmap.png`
+    - 正式推荐口径的相对重要性 + 稳定性图：`official_relative_importance_and_stability.png`
+  - 日志：`output.log_file`（默认 `run_log.txt`）
+- **说明**
+  - SHAP 只在 **验证 fold** 上计算并汇总，不使用训练 fold 作为正式归因口径
+  - One-hot 后的类别变量 SHAP 会按原始特征名回聚合，再参与排序与稳定性评估
+  - 跨方案画图默认使用 `median_importance_share`，避免 `raw_y` 与 `log_y` 方案之间的 SHAP 数值单位不可直接比较
+  - `shap_summary_<中文预处理名>.png` 基于该方案所有验证 fold 的 SHAP 值与特征矩阵拼接生成；若方案包含类别编码，图中会显示 one-hot 后的列
+  - `encoded_cat__zscore_x__raw_y` 与 `encoded_cat__minmax_x__raw_y` 仅作为诊断口径，不建议直接当正式结果
+
+### H) `gwxgb/gwxgb_shap.py`（GeoXGBoost + 带宽优化 + 全局 SHAP）
 
 - **配置**：`gwxgb/gwxgb_config.yaml`
 - **输入**

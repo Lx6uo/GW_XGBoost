@@ -1,6 +1,7 @@
 data:
   # CSV data path
   path: "../../Data/年份终市级指标数据（5年截面）/终市级指标数据_with_latlon_2022.csv"
+  # path: "../../Output/output_260303/xgb_终市级指标数据_with_latlon_2005_20260311_202325/preprocess_normalize/normalized_feature_table.csv"
   # 城市名列（用于局部模型输出表格中附加城市名；若不写则尝试自动检测）
   city_col: "城市"
   # Dependent variable (target)
@@ -12,7 +13,8 @@ data:
     "建筑面积(万平方米)",
     "电力消费量（亿千瓦小时）",
     "电网因子（kgco2/kwh)",
-    "人均地区生产总值(元）","第三产业比重",
+    "人均地区生产总值(元）",
+    "第三产业比重",
     "总人口（万人）",
     "城镇化率",
     "能源结构",

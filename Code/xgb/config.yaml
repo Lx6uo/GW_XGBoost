@@ -9,11 +9,12 @@ data:
     "建筑面积(万平方米)",
     "电力消费量（亿千瓦小时）",
     "电网因子（kgco2/kwh)",
-    "人均地区生产总值(元）","第三产业比重",
+    "人均地区生产总值(元）",
+    "第三产业比重",
     "总人口（万人）",
     "城镇化率",
     "能源结构",
-    "气候区",
+    # "气候区",  --- IGNORE ---  # 气候区是分类变量，暂不纳入特征列表（后续可考虑编码后加入）
     "单位面积建材碳排放（kgco2/m2)"
     ]
   sep: ","
@@ -71,7 +72,7 @@ shap:
 
 output:
   # 输出目录
-  output_dir: "../../Output/output_260303"
+  output_dir: "../../Output/output_xgb"
   # 是否按运行时间自动创建子目录（0/1；默认 1）
   timestamp_subdir: 1
   # 子目录时间格式（仅用于命名）
@@ -180,3 +181,68 @@ tuning:
   final_grid_search: 0
   # 全量 GridSearchCV 的 CV 折数（可选；缺省使用 inner_splits）
   # final_cv: 3
+
+attribution:
+  # 归因稳健性分析输出子目录（位于本次运行 output 子目录下）
+  output_subdir: "attribution_robustness"
+  # 是否输出归因稳健性图（0/1）
+  save_plots: 1
+  # 图像输出子目录（位于 attribution.output_subdir 下）
+  plots_dir: "plots"
+  # 每张柱状图展示的特征数量
+  plot_top_n: 10
+  # 跨方案热力图最多展示多少个特征
+  comparison_max_features: 15
+  # 每张 SHAP summary 图最多展示多少个特征
+  summary_max_display: 15
+  # 归因稳健性图 DPI
+  plot_dpi: 300
+  # 本质上是类别变量、但目前以数值编码存储的特征；正式分析会优先编码后再纳入
+  categorical_features:
+    - "气候区"
+  # 连续特征列表；如省略则自动使用除 categorical_features 外的其它特征
+  # continuous_features:
+  #   - "施工面积(万平方米)"
+  #   - "建筑面积(万平方米)"
+  # 候选归因口径（按顺序执行）
+  candidate_specs:
+    - "raw_x__raw_y"
+    - "encoded_cat__raw_y"
+    - "encoded_cat__log_skewed_x__raw_y"
+    - "encoded_cat__log_y"
+    - "encoded_cat__log_skewed_x__log_y"
+    - "encoded_cat__zscore_x__raw_y"
+    - "encoded_cat__minmax_x__raw_y"
+  # log_skewed_x 的判定规则：连续特征满足 min>0 且 p95/p50 >= 阈值
+  log_skewed_ratio_threshold: 8.0
+  # 归因稳健性评估：5 次重复 × 5 折验证集 SHAP
+  cv_repeats: 5
+  cv_splits: 5
+  cv_seeds: [3407, 233, 42, 7, 2026]
+  # Top-K 稳定性统计口径
+  top_k: 5
+  # 正式口径的性能约束基线（推荐使用编码类别后的原始口径）
+  baseline_spec: "encoded_cat__raw_y"
+  # 正式口径约束：相对 baseline，R2 最多下降 0.05，RMSE 最多上升 10%
+  performance_r2_drop_tolerance: 0.05
+  performance_rmse_rise_tolerance: 0.10
+  # 平均 Spearman 接近时的并列阈值；并列时再看 Top-K 稳定性和是否使用 log_y
+  spearman_tie_tolerance: 0.02
+
+preprocess_normalize:
+  # 归一化预处理输出子目录（位于本次运行 output 子目录下）
+  output_subdir: "preprocess_normalize"
+  # 归一化后的整表文件名
+  output_file: "normalized_feature_table.csv"
+  # 归一化清单文件名
+  manifest_file: "normalized_feature_manifest.csv"
+  # 指定要参与归一化的特征；如省略则默认使用 data.features
+  # include_features:
+  #   - "施工面积(万平方米)"
+  #   - "建筑面积(万平方米)"
+  # 已经属于比例/比率/人均/单位面积等“相对量”的特征，默认排除
+  exclude_features:
+    - "电网因子（kgco2/kwh)"
+    - "第三产业比重"
+    - "城镇化率"
+    - "能源结构"

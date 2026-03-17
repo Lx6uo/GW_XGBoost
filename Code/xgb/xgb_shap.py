@@ -35,8 +35,17 @@ def _get_config_base_dir(config: Dict[str, Any]) -> Path:
     return Path.cwd()
 
 
+def _normalize_path_value(path_value: Any) -> str:
+    text = str(path_value).strip()
+    if len(text) >= 3 and text[0].lower() == "r" and text[1] in {'"', "'"} and text[-1] == text[1]:
+        return text[2:-1]
+    if len(text) >= 2 and text[0] in {'"', "'"} and text[-1] == text[0]:
+        return text[1:-1]
+    return text
+
+
 def _resolve_path(path_value: Any, base_dir: Path) -> Path:
-    path = Path(str(path_value)).expanduser()
+    path = Path(_normalize_path_value(path_value)).expanduser()
     if path.is_absolute():
         return path
     return (base_dir / path).resolve()

@@ -28,6 +28,7 @@ if _XGB_DIR.exists() and str(_XGB_DIR) not in sys.path:
     sys.path.insert(0, str(_XGB_DIR))
 
 from xgb_shap import (
+    _resolve_path,
     load_config,
     ensure_output_dir,
     ensure_run_output_dir,
@@ -93,9 +94,7 @@ def load_dataset(config: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.DataFrame, pd
     """根据配置加载数据集和坐标列。"""
     data_cfg = config["data"]
     base_dir = Path(str(config.get("_config_dir") or Path.cwd()))
-    data_path = Path(str(data_cfg["path"])).expanduser()
-    if not data_path.is_absolute():
-        data_path = (base_dir / data_path).resolve()
+    data_path = _resolve_path(data_cfg["path"], base_dir)
     data_cfg["path"] = str(data_path)
     df = pd.read_csv(
         data_path,
