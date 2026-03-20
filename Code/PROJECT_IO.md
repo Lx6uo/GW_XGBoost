@@ -151,3 +151,68 @@ uv run python .\gwxgb\gwxgb_shap.py -c .\gwxgb\gwxgb_config.yaml
 - 2026-02-26 运行时在仓库根目录生成的同名输出，已从仓库根目录移出并归档到：
   - `Output/output_gwxgb/_legacy/20260226_from_repo_root/`
 - 当前脚本默认输出位置为：`Output/output_gwxgb/<gwxgb_数据名_时间戳>/`（不覆盖历史运行）
+
+### I) `gwxgb/compare/gwxgb_compare_*_demo.py`（全局 SHAP vs 局部 SHAP 对比 demo）
+
+- **推荐统一入口**
+  - `gwxgb/compare/gwxgb_compare_all.py`
+  - 配置：`gwxgb/compare/gwxgb_compare_all_config.yaml`
+  - 用途：一次运行同时生成 `center_local`、`local_importance`、`pooled_local` 三类对比结果
+  - 输出结构：
+    - `<run_output_dir>/center_local/`
+    - `<run_output_dir>/local_importance/`
+    - `<run_output_dir>/pooled_local/`
+    - `<run_output_dir>/comparison_metrics_overview.csv`
+    - `<run_output_dir>/comparison_metrics_overview.txt`
+- **配置**
+  - `gwxgb/compare/gwxgb_compare_center_local_config.yaml`
+  - `gwxgb/compare/gwxgb_compare_local_importance_config.yaml`
+  - `gwxgb/compare/gwxgb_compare_pooled_local_config.yaml`
+  - 3 个 compare cfg 默认都通过 `base_config: "../gwxgb_config.yaml"` 继承主 `gwxgb` 配置
+- **用途**
+  - `center_local`：每个中心样本只保留一条“该中心局部模型下的 SHAP”，再与全局 SHAP 对比
+    - 适用问题：如果每个地理位置只解释自己一次，局部解释与全局解释是否一致
+    - 解读重点：这是最适合做主比较的口径，因为一地一条解释，不会重复计数
+  - `local_importance`：每个局部模型先汇总为一条 `mean(|SHAP|)` 重要性向量，再看其分布与全局 SHAP 的差异
+    - 适用问题：不同位置的局部模型，其重要性结构和方向是否稳定，全局模型是否把空间差异平均掉
+    - 解读重点：强度看 `mean(|SHAP|)`，方向看 `mean(SHAP)`；summary 图红蓝颜色表示各局部模型中心点的原始特征值高低
+  - `pooled_local`：把所有局部模型邻域样本的 SHAP 行直接拼接后，与全局 SHAP 对比，用于演示“局部 SHAP 全部拼池”的思路及其重复计数偏差
+    - 适用问题：如果把所有局部解释直接合并，整体形态会怎样
+    - 解读重点：该口径会重复计数同一样本，应结合 `pooled_sample_reuse_counts.csv` 判断偏差程度
+- **默认行为**
+  - 数据、特征、模型参数、带宽、`local_shap` 口径默认与 `gwxgb/gwxgb_config.yaml` 完全一致
+  - compare cfg 仅额外覆盖 `output.output_dir`、`output.run_prefix`、`output.capture_prints` 与 `compare.*`
+  - `compare.row_limit: 0` 表示直接使用主配置对应的全量数据
+  - 统一入口 `gwxgb_compare_all_config.yaml` 额外提供 `run_center_local`、`run_local_importance`、`run_pooled_local` 三个开关
+- **输出**
+  - 根目录
+    - `global_shap_summary.png`
+    - `global_shap_bar.png`
+    - `comparison_metrics_overview.csv`
+    - `comparison_metrics_overview.txt`
+  - `center_local`
+    - `global_vs_center_local_shap.csv`
+    - `center_local_shap_rows.csv`
+    - `center_local_shap_summary.png`
+    - `center_local_shap_bar.png`
+    - `center_local_comparison_metrics.txt`
+  - `local_importance`
+    - `global_vs_local_importance_summary.csv`
+    - `local_model_importance_wide.csv`
+    - `local_model_importance_long.csv`
+    - `local_model_importance_summary.png`
+      - 红蓝颜色编码使用各局部模型中心点的原始特征值
+    - `local_model_importance_bar.png`
+    - `local_model_signed_shap_wide.csv`
+    - `global_vs_local_signed_shap_summary.csv`
+    - `local_model_positive_negative_summary.csv`
+    - `local_model_signed_summary.png`
+      - 红蓝颜色编码使用各局部模型中心点的原始特征值
+    - `local_importance_comparison_metrics.txt`
+  - `pooled_local`
+    - `global_vs_pooled_local_shap.csv`
+    - `pooled_local_shap_rows.csv`
+    - `pooled_sample_reuse_counts.csv`
+    - `pooled_local_shap_summary.png`
+    - `pooled_local_shap_bar.png`
+    - `pooled_local_comparison_metrics.txt`

@@ -1,0 +1,12 @@
+base_config: "../gwxgb_config.yaml"
+
+output:
+  output_dir: "../../../Output/output_gwxgb_compare"
+  run_prefix: "gwxgb_pooled_local_compare"
+  # compare 脚本默认关闭 stdout/stderr 捕获，避免 geoxgboost 在解释器退出阶段触发日志流收尾问题
+  capture_prints: 0
+
+compare:
+  row_limit: 0
+  top_k: 5
+  plot_top_n: 10

@@ -1,12 +1,12 @@
 data:
-  # CSV data path
-  path: "../../Data/年份终市级指标数据（5年截面）/终市级指标数据_with_latlon_2022.csv"
+  # CSV 数据路径
+  path: "../../Data/年份终市级指标数据（5年截面）/终市级指标数据_with_latlon_2005.csv"
   # path: "../../Output/output_260303/xgb_终市级指标数据_with_latlon_2005_20260311_202325/preprocess_normalize/normalized_feature_table.csv"
   # 城市名列（用于局部模型输出表格中附加城市名；若不写则尝试自动检测）
   city_col: "城市"
-  # Dependent variable (target)
+  # 因变量（目标列）
   target:  "co2总量（万吨）"
-  # Feature columns (excluding target and coords)
+  # 特征列（不包含 target 和 coords）
   features:
     [ 
     "施工面积(万平方米)",
@@ -18,16 +18,16 @@ data:
     "总人口（万人）",
     "城镇化率",
     "能源结构",
-    # "气候区",  --- IGNORE ---  # 气候区是分类变量，暂不纳入特征列表（后续可考虑编码后加入）
+    # "气候区",  --- 暂不使用 ---  # 气候区是分类变量，暂不纳入特征列表（后续可考虑编码后加入）
     "单位面积建材碳排放（kgco2/m2)"
     ]
-  # Coordinate columns (e.g. longitude, latitude) — 请按实际字段名修改
+  # 坐标列（例如经度、纬度）——请按实际字段名修改
   coords: ["纬度", "经度"]
   sep: ","
   encoding: "utf-8"
 
 model:
-  # XGBoost hyperparameters used inside GeoXGBoost
+  # GeoXGBoost 内部使用的 XGBoost 超参数
   params:
       n_estimators: 300
       learning_rate: 0.05
@@ -43,11 +43,11 @@ grid_search:
   # 是否启用全局 XGBoost 的网格搜索 (True/False)
   # 注意：默认关闭（开启后 param_grid 组合数可能很大，运行时间会非常久）
   enabled: False
-  # 优化的评估指标 (例如: neg_root_mean_squared_error, neg_mean_absolute_error, r2)
+  # 优化所使用的评估指标（例如：neg_root_mean_squared_error、neg_mean_absolute_error、r2）
   scoring: "neg_root_mean_squared_error"
-  # 交叉验证折数 (默认 5)
+  # 交叉验证折数（默认 5）
   cv: 5
-  # 参数搜索网格; 键名必须与 XGBoost 参数名一致
+  # 参数搜索网格；键名必须与 XGBoost 参数名一致
   param_grid:
     n_estimators: [100, 200, 300, 500]        # 树的数量
     max_depth: [3, 4, 5, 6, 7]                # 树的最大深度
@@ -56,33 +56,33 @@ grid_search:
     gamma: [0.05, 0.1, 0.2]                      # 节点分裂所需的最小损失下降
     subsample: [0.6, 0.8, 1.0]                # 样本采样率
     colsample_bytree: [0.6, 0.8, 1.0]         # 特征采样率
-  # 详细程度 (0=无, 1=进度条, 2=详细)
+  # 输出详细程度（0=无，1=进度，2=详细）
   verbose: 1
 
 gw:
-  # Bandwidth:
-  # for Adaptive kernel = number of nearest neighbours;
-  # for Fixed = distance threshold
+  # 带宽：
+  # - Adaptive 核函数：表示最近邻数量
+  # - Fixed 核函数：表示距离阈值
   bw: 115
-  # Whether to optimize bw automatically (0/1)
+  # 是否自动优化 bw（0/1）
   optimize_bw: 0
-  # Optional search range for bw optimization; if omitted, a default range around `bw` is used.
-  # - Adaptive: integers (neighbour count)
-  # - Fixed: floats (distance threshold)
+  # bw 优化时可选的搜索范围；若不写，则会使用围绕 `bw` 的默认范围
+  # - Adaptive：整数（邻居数量）
+  # - Fixed：浮点数（距离阈值）
   bw_min: 80
   bw_max: 140
   bw_step: 5
-  # "Adaptive" or "Fixed"
+  # 核函数类型："Adaptive" 或 "Fixed"
   kernel: "Adaptive"
-  # Whether to use spatial weights matrix
+  # 是否使用空间权重矩阵
   spatial_weights: True
-  # XGBoost feature importance type used internally by geoxgboost
+  # geoxgboost 内部使用的 XGBoost 特征重要性类型
   feat_importance: "gain"
-  # "varying" or "fixed"
+  # alpha 权重类型："varying" 或 "fixed"
   alpha_wt_type: "varying"
-  # Alpha weight value between 0 and 1
+  # alpha 权重取值（0 到 1 之间）
   alpha_wt: 1.0
-  # Test size used inside geoxgboost (for internal evaluation)
+  # geoxgboost 内部评估使用的测试集比例
   test_size: 0.2
   seed: 7
   n_splits: 5
@@ -93,26 +93,26 @@ shap:
   # - shap: 强制使用 shap.TreeExplainer
   # - xgboost: 强制使用 xgboost Booster.predict(pred_contribs/pred_interactions)
   engine: "auto"
-  # Whether to draw SHAP summary plot (0/1)
+  # 是否绘制 SHAP summary 图（0/1）
   use_summary: 1
-  # Whether to draw SHAP dependence plots (0/1)
+  # 是否绘制 SHAP dependence 图（0/1）
   use_dependence: 1
   # 是否对所有特征都输出单独的 dependence 图（0/1）
   # - 若为 1，则忽略 dependence_top_n（但仍会尊重 dependence_features）
   dependence_all: 1
-  # Interaction plots: base feature and with-features
-  # interaction_base: "x2"
+  # 交互图配置：基准特征与配对特征
+  # interaction_base: "x2" # 能源结构 建筑面积
   # interaction_with: ["x3", "x5"]
-  # If dependence_features is omitted, top-N by mean |SHAP| will be used
+  # 若未设置 dependence_features，则按 mean |SHAP| 的前 N 个特征自动选择
   # dependence_features: ["x1", "x2"]
-  dependence_top_n: 5
-  # Whether to compute SHAP interaction values (0/1)
-  compute_interactions: 0
-  # Top-N interaction pairs saved to CSV
-  interaction_top_n_pairs: 20
+  # dependence_top_n: 5
+  # 是否计算 SHAP 交互值（0/1）
+  compute_interactions: 1
+  # 保存到 CSV 的前 N 个交互特征对
+  interaction_top_n_pairs: 45
 
 output:
-  # Output directory for GeoXGBoost SHAP results
+  # GeoXGBoost SHAP 结果输出目录
   output_dir: "../../Output/output_gwxgb"
   # 是否按运行时间自动创建子目录（0/1；默认 1）
   timestamp_subdir: 1
@@ -126,17 +126,17 @@ output:
   data_name_max_len: 40
   # 是否将 stdout/stderr（含 print 输出）一并写入日志文件（0/1）
   capture_prints: 1
-  # SHAP summary plot filename
+  # SHAP summary 图文件名
   summary_file: "gw_shap_summary.png"
-  # SHAP dependence plot filename prefix
+  # SHAP dependence 图文件名前缀
   dependence_prefix: "gw_shap_dependence_"
-  # SHAP interaction plot filename prefix
+  # SHAP 交互图文件名前缀
   interaction_prefix: "gw_shap_interaction_"
-  # SHAP interaction pairs CSV filename
+  # SHAP 交互特征对 CSV 文件名
   interaction_pairs_file: "gw_shap_interactions.csv"
-  # Mean |SHAP| bar plot filename
+  # Mean |SHAP| 条形图文件名
   mean_abs_shap_file: "gw_mean_abs_shap.png"
-  # Log file for recording run details
+  # 记录运行详情的日志文件名
   log_file: "run_log.txt"
 
 local_shap:
