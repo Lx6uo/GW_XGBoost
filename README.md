@@ -26,6 +26,7 @@
 - [Practical Notes](#practical-notes)
 - [Contributing](#contributing)
 - [Acknowledgements](#acknowledgements)
+- [Third-Party Notices](#third-party-notices)
 - [License](#license)
 
 ## Project Snapshot
@@ -488,7 +489,38 @@ This repository builds on the following core tools and ideas:
 
 仓库中的 `Ref/` 目录也用于存放项目相关的论文和参考材料。
 
+## Third-Party Notices
+
+本仓库在运行时依赖多个第三方开源包，包括但不限于：
+
+- `SHAP`
+- `XGBoost`
+- `GeoXGBoost`
+- `scikit-learn`
+- `pandas` / `numpy` / `matplotlib` / `scipy`
+
+此外，仓库还保留了一个第三方 demo 子目录：
+
+- [`test/DemoGXGBoost/`](test/DemoGXGBoost/)
+
+第三方依赖与第三方材料的许可说明已集中写入：
+
+- [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
+
+如果你打算复用仓库中的 demo 数据、示例脚本、教程材料或未来新增的第三方附件，请先检查对应子目录中的许可文件与来源说明。
+
 ## License
 
-当前仓库尚未看到单独的 `LICENSE` 文件。  
-如果你计划将本仓库长期公开共享，建议补充明确的开源许可证，以便他人理解可复用范围。
+本仓库的原创代码与原创文档采用 [`MIT License`](LICENSE) 发布。
+
+选择 `MIT` 作为本项目许可证的原因是：
+
+- 对科研论文配套代码更常见、简洁、易理解
+- 允许他人复现、引用、修改和再利用，复用门槛低
+- 与当前使用的主要依赖许可证兼容，包括 `MIT`、`BSD` 和 `Apache-2.0`
+
+说明：
+
+- 根目录 [`LICENSE`](LICENSE) 适用于本仓库的原创内容，除非某个子目录或文件另有单独说明
+- 第三方代码、第三方 demo、数据、教程和其他材料仍受其各自许可证约束
+- 第三方许可信息见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
