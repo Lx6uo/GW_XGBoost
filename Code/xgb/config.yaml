@@ -70,6 +70,52 @@ shap:
   # 导出的交互作用特征对数量（按平均绝对交互强度从大到小排序）
   interaction_top_n_pairs: 20
 
+interaction_matrix:
+  # 复刻“上三角热块 + 下三角蜂群”的 SHAP interaction matrix 输出目录
+  output_subdir: "interaction_matrix"
+  # 输出文件名前缀；最终文件名为 <output_stem>_<scheme_index>_<style_index>.png
+  output_stem: "shap_int"
+  # interaction matrix 脚本内部使用的 train/test 划分比例与随机种子
+  test_size: 0.2
+  random_state: 42
+  # 是否先做一个轻量 GridSearchCV 再计算 SHAP interaction（0/1）
+  use_grid_search: 1
+  # GridSearchCV 评分与并行设置
+  scoring: "neg_mean_squared_error"
+  cv_splits: 3
+  grid_verbose: 1
+  grid_n_jobs: 1
+  model_n_jobs: 1
+  # 若不改，默认等价于示例代码中的 n_estimators: [100, 200, 300]
+  param_grid:
+    n_estimators:
+      - 100
+      - 200
+      - 300
+    # max_depth:
+    #   - 3
+    #   - 5
+    #   - 7
+  # 配色与点形；scheme_index=1 会使用与两特征交互图一致的 plasma 热力配色
+  scheme_index: 1
+  style_index: 11
+  # 画布与文字大小
+  figure_cell_size: 1.45
+  title_fontsize: 18
+  tick_fontsize: 11
+  value_fontsize: 12
+  # 下三角蜂群图抖动参数
+  beeswarm_bins: 35
+  beeswarm_width: 0.15
+  # 背景与标注
+  lower_facecolor: "#f2f2f2"
+  upper_facecolor: "#f9f9f9"
+  xlabel: "SHAP interaction value"
+  colorbar_label: "Raw feature value"
+  # 保存格式
+  save_png: 1
+  png_dpi: 300
+
 output:
   # 输出目录
   output_dir: "../../Output/output_xgb"

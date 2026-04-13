@@ -100,15 +100,18 @@ shap:
   # 是否对所有特征都输出单独的 dependence 图（0/1）
   # - 若为 1，则忽略 dependence_top_n（但仍会尊重 dependence_features）
   dependence_all: 1
-  # 交互图配置：基准特征与配对特征
-  # interaction_base: "x2" # 能源结构 建筑面积
-  # interaction_with: ["x3", "x5"]
+  # 交互图配置：
+  # - interaction_top_n_pairs：既控制“Top 交互对 CSV”条数，也控制“Top 交互作用单独输出图”张数
+  # - interaction_base：默认以“能源结构”为基准特征，输出其与其它因素的交互图
+  # - interaction_with：若留空/不写，则表示 interaction_base 与除自身外所有特征作图
+  interaction_base: "能源结构"
+  # interaction_with: []
   # 若未设置 dependence_features，则按 mean |SHAP| 的前 N 个特征自动选择
   # dependence_features: ["x1", "x2"]
   # dependence_top_n: 5
   # 是否计算 SHAP 交互值（0/1）
   compute_interactions: 1
-  # 保存到 CSV 的前 N 个交互特征对
+  # 保存到 CSV 的前 N 个交互特征对；同时输出同样数量的 Top 单独交互图
   interaction_top_n_pairs: 45
 
 output:

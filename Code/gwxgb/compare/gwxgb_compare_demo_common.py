@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -41,11 +42,16 @@ from gwxgb_shap import (
     run_gxgb,
 )
 from xgb_shap import (
+    _resolve_path,
     build_and_train_model,
     compute_shap_and_interactions,
     ensure_run_output_dir,
     load_config,
+    plot_shap_dependence,
+    plot_fixed_base_interactions,
+    plot_top_interactions,
     setup_logging,
+    summarize_and_save_interactions,
 )
 
 
@@ -58,6 +64,7 @@ class CompareArtifacts:
     y: pd.Series
     coords: pd.DataFrame
     global_shap_values: np.ndarray
+    global_interaction_values: np.ndarray | None
     global_importance_df: pd.DataFrame
     local_pooled_df: pd.DataFrame
     local_center_df: pd.DataFrame
@@ -95,6 +102,18 @@ def _merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, An
     return merged
 
 
+def _resolve_known_config_paths(config: Dict[str, Any], *, config_dir: Path) -> Dict[str, Any]:
+    for section, key in (("data", "path"), ("output", "output_dir")):
+        section_cfg = config.get(section)
+        if not isinstance(section_cfg, dict):
+            continue
+        raw = section_cfg.get(key)
+        if raw in (None, ""):
+            continue
+        section_cfg[key] = str(_resolve_path(raw, config_dir))
+    return config
+
+
 def _load_demo_config_recursive(
     config_path: Path,
     *,
@@ -107,6 +126,7 @@ def _load_demo_config_recursive(
     seen.add(resolved_path)
 
     config = load_config(resolved_path)
+    config = _resolve_known_config_paths(config, config_dir=resolved_path.parent)
     base_ref = str(config.get("base_config") or "").strip()
     if base_ref:
         base_path = Path(base_ref)
@@ -430,6 +450,224 @@ def save_pooled_local_native_plots(
         max_display=max_display,
         summary_title="Pooled Local SHAP Summary",
         bar_title="Pooled Local SHAP Mean |SHAP|",
+    )
+
+
+def build_sample_aggregated_local_df(artifacts: CompareArtifacts) -> pd.DataFrame:
+    pooled_df = artifacts.local_pooled_df.copy()
+    if pooled_df.empty:
+        raise ValueError("pooled 局部 SHAP 为空，无法按 sample 聚合。")
+
+    feature_names = list(artifacts.X.columns)
+    shap_cols = [f"shap_{feature}" for feature in feature_names]
+    missing = [col for col in shap_cols if col not in pooled_df.columns]
+    if missing:
+        raise KeyError(f"pooled 局部 SHAP 缺少列: {missing}")
+
+    grouped = pooled_df.groupby("sample_pos", sort=True, dropna=False)
+    meta_df = grouped.agg(
+        sample_index=("sample_index", "first"),
+        y=("y", "first"),
+        reuse_count=("sample_pos", "size"),
+        n_center_models=("center_label", "nunique"),
+        mean_distance=("distance", "mean"),
+        min_distance=("distance", "min"),
+        max_distance=("distance", "max"),
+    )
+    shap_mean_df = grouped[shap_cols].mean()
+    aggregated_df = meta_df.join(shap_mean_df, how="inner").reset_index()
+    aggregated_df["sample_pos"] = pd.to_numeric(
+        aggregated_df["sample_pos"], errors="coerce"
+    ).astype("Int64")
+    return aggregated_df
+
+
+def save_sample_aggregated_local_native_plots(
+    artifacts: CompareArtifacts,
+    sample_aggregated_df: pd.DataFrame,
+    *,
+    output_dir: Path,
+    compare_cfg: Dict[str, Any],
+) -> None:
+    if sample_aggregated_df.empty:
+        logging.warning("sample 聚合后的局部 SHAP 为空，跳过原生图。")
+        return
+
+    feature_names = list(artifacts.X.columns)
+    sample_shap = extract_shap_matrix_from_frame(sample_aggregated_df, feature_names)
+    sample_X = extract_feature_rows_by_position(
+        artifacts.X,
+        sample_aggregated_df["sample_pos"],
+        label="sample_aggregated_local",
+    )
+    n_rows = min(len(sample_X), sample_shap.shape[0])
+    if n_rows <= 0:
+        logging.warning("sample 聚合后的局部 SHAP 原生图未生成：缺少可对齐的样本特征行。")
+        return
+
+    sample_shap = sample_shap[:n_rows]
+    sample_X = sample_X.iloc[:n_rows].reset_index(drop=True)
+    max_display = compare_plot_max_display(compare_cfg, len(feature_names))
+    summary_path = output_dir / "sample_aggregated_local_summary.png"
+    bar_path = output_dir / "sample_aggregated_local_bar.png"
+    save_shap_native_plots(
+        sample_shap,
+        path_summary=summary_path,
+        path_bar=bar_path,
+        features=sample_X,
+        feature_names=feature_names,
+        max_display=max_display,
+        summary_title="Sample-aggregated Local SHAP Summary",
+        bar_title="Sample-aggregated Local SHAP Mean |SHAP|",
+    )
+
+    mean_value_df = build_importance_table(
+        feature_names,
+        np.mean(np.abs(sample_shap), axis=0),
+        prefix="sample_aggregated_local",
+    )
+    mean_value_path = output_dir / "sample_aggregated_local_shap_mean_value.csv"
+    mean_value_df.to_csv(mean_value_path, index=False, encoding="utf-8-sig")
+    logging.info("sample 聚合 SHAP mean value 表已保存: %s", mean_value_path.resolve())
+
+    combined_path = output_dir / "sample_aggregated_local_shap_sum.png"
+    save_combined_mean_value_summary_plot(
+        shap_values=sample_shap,
+        features=sample_X,
+        feature_names=feature_names,
+        max_display=max_display,
+        output_path=combined_path,
+        title="Sample-aggregated Local SHAP",
+    )
+    logging.info("sample 聚合 SHAP 综合图已保存: %s", combined_path.resolve())
+
+
+def save_combined_mean_value_summary_plot(
+    *,
+    shap_values: np.ndarray,
+    features: pd.DataFrame,
+    feature_names: Iterable[str],
+    max_display: int,
+    output_path: Path,
+    title: str,
+) -> None:
+    shap_array = np.asarray(shap_values, dtype=float)
+    if shap_array.ndim != 2 or shap_array.shape[0] == 0 or shap_array.shape[1] == 0:
+        raise ValueError("shap_values 为空或维度不合法，无法生成综合图。")
+
+    feat_names = list(feature_names)
+    max_display = max(1, min(int(max_display), shap_array.shape[1]))
+    explanation = shap.Explanation(
+        values=shap_array,
+        data=features.reset_index(drop=True),
+        feature_names=feat_names,
+    )
+
+    fig_height = max(4.8, 0.52 * max_display + 1.8)
+    fig, ax_sum = plt.subplots(figsize=(12, fig_height))
+    ax_mean = ax_sum.twiny()
+    ax_mean.set_zorder(0)
+    ax_sum.set_zorder(1)
+    ax_sum.patch.set_alpha(0.0)
+    ax_mean.patch.set_alpha(0.0)
+
+    shap.plots.beeswarm(
+        explanation,
+        max_display=max_display,
+        ax=ax_sum,
+        show=False,
+        group_remaining_features=False,
+        color_bar=True,
+        plot_size=None,
+    )
+
+    y_ticks = ax_sum.get_yticks()
+    displayed_features = [tick.get_text() for tick in ax_sum.get_yticklabels()]
+    mean_abs = np.mean(np.abs(shap_array), axis=0)
+    mean_map = {name: float(value) for name, value in zip(feat_names, mean_abs)}
+    bar_values = np.asarray(
+        [mean_map.get(feature, np.nan) for feature in displayed_features],
+        dtype=float,
+    )
+
+    finite_bar = bar_values[np.isfinite(bar_values)]
+    if finite_bar.size > 0:
+        vmax = float(finite_bar.max())
+        vmin = float(finite_bar.min())
+    else:
+        vmax = 1.0
+        vmin = 0.0
+    if np.isclose(vmin, vmax):
+        vmin = 0.0
+    norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+    bar_cmap = shap.plots.colors.red_blue
+    bar_colors = [bar_cmap(norm(value)) if np.isfinite(value) else "#cccccc" for value in bar_values]
+
+    ax_mean.barh(
+        y_ticks,
+        bar_values,
+        height=0.72,
+        color=bar_colors,
+        edgecolor="#666666",
+        linewidth=0.8,
+        alpha=0.42,
+        zorder=0,
+    )
+    ax_mean.set_ylim(ax_sum.get_ylim())
+    ax_mean.set_yticks(y_ticks)
+    ax_mean.set_yticklabels([])
+    ax_mean.grid(False)
+    ax_mean.xaxis.set_ticks_position("top")
+    ax_mean.xaxis.set_label_position("top")
+    ax_mean.set_xlabel("Mean |SHAP value|", fontsize=12)
+    if finite_bar.size > 0:
+        ax_mean.set_xlim(0.0, float(finite_bar.max()) * 1.1)
+    else:
+        ax_mean.set_xlim(0.0, 1.0)
+
+    ax_sum.set_title(title, fontsize=16, pad=16)
+    ax_sum.set_xlabel("SHAP value (impact on model output)", fontsize=12)
+    ax_sum.set_ylabel("Features", fontsize=12)
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_sample_aggregated_local_dependence_plots(
+    artifacts: CompareArtifacts,
+    sample_aggregated_df: pd.DataFrame,
+    *,
+    output_dir: Path,
+) -> None:
+    if sample_aggregated_df.empty:
+        logging.warning("sample 聚合后的局部 SHAP 为空，跳过 dependence 图。")
+        return
+
+    feature_names = list(artifacts.X.columns)
+    sample_shap = extract_shap_matrix_from_frame(sample_aggregated_df, feature_names)
+    sample_X = extract_feature_rows_by_position(
+        artifacts.X,
+        sample_aggregated_df["sample_pos"],
+        label="sample_aggregated_local_dependence",
+    )
+    n_rows = min(len(sample_X), sample_shap.shape[0])
+    if n_rows <= 0:
+        logging.warning("sample 聚合后的局部 SHAP dependence 图未生成：缺少可对齐的样本特征行。")
+        return
+
+    dep_config = deepcopy(artifacts.config)
+    output_cfg = dep_config.get("output")
+    if not isinstance(output_cfg, dict):
+        output_cfg = {}
+        dep_config["output"] = output_cfg
+    output_cfg["dependence_prefix"] = "sample_aggregated_local_dependence_"
+
+    plot_shap_dependence(
+        sample_shap[:n_rows],
+        sample_X.iloc[:n_rows].reset_index(drop=True),
+        dep_config,
+        output_dir,
     )
 
 
@@ -879,7 +1117,9 @@ def run_compare_pipeline(config: Dict[str, Any], output_dir: Path) -> CompareArt
 
     logging.info("开始训练全局 XGBoost 基线模型...")
     global_model = build_and_train_model(config, X, y)
-    global_shap_values, _ = compute_shap_and_interactions(global_model, X, config)
+    global_shap_values, global_interaction_values = compute_shap_and_interactions(
+        global_model, X, config
+    )
     global_importance_df = build_importance_table(
         X.columns,
         np.mean(np.abs(np.asarray(global_shap_values, dtype=float)), axis=0),
@@ -888,6 +1128,9 @@ def run_compare_pipeline(config: Dict[str, Any], output_dir: Path) -> CompareArt
     global_importance_path = output_dir / "global_feature_importance.csv"
     global_importance_df.to_csv(global_importance_path, index=False, encoding="utf-8-sig")
     logging.info(f"全局 SHAP 重要性表已保存: {global_importance_path}")
+    summarize_and_save_interactions(global_interaction_values, X, config, output_dir)
+    plot_top_interactions(global_interaction_values, X, config, output_dir)
+    plot_fixed_base_interactions(global_interaction_values, X, config, output_dir)
 
     bw_opt = optimize_bandwidth(config, X, y, coords, output_dir=output_dir)
     logging.info(f"对比脚本使用的带宽 bw = {bw_opt}")
@@ -917,6 +1160,11 @@ def run_compare_pipeline(config: Dict[str, Any], output_dir: Path) -> CompareArt
         y=y,
         coords=coords,
         global_shap_values=np.asarray(global_shap_values, dtype=float),
+        global_interaction_values=(
+            np.asarray(global_interaction_values, dtype=float)
+            if global_interaction_values is not None
+            else None
+        ),
         global_importance_df=global_importance_df,
         local_pooled_df=local_pooled_df,
         local_center_df=local_center_df,

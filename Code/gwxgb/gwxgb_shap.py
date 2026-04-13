@@ -36,6 +36,7 @@ from xgb_shap import (
     compute_shap_and_interactions,
     plot_shap_summary,
     plot_shap_dependence,
+    plot_top_interactions,
     plot_fixed_base_interactions,
     summarize_and_save_interactions,
 )
@@ -701,12 +702,18 @@ class _TeeStream:
 
     def write(self, data: str) -> int:
         self._primary.write(data)
-        self._secondary.write(data)
+        try:
+            self._secondary.write(data)
+        except Exception:
+            pass
         return len(data)
 
     def flush(self) -> None:
         self._primary.flush()
-        self._secondary.flush()
+        try:
+            self._secondary.flush()
+        except Exception:
+            pass
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._primary, name)
@@ -788,8 +795,9 @@ def main() -> None:
 
     plot_shap_summary(shap_values_global, X, config, output_dir)
     plot_shap_dependence(shap_values_global, X, config, output_dir)
-    plot_fixed_base_interactions(interaction_values_global, X, config, output_dir)
     summarize_and_save_interactions(interaction_values_global, X, config, output_dir)
+    plot_top_interactions(interaction_values_global, X, config, output_dir)
+    plot_fixed_base_interactions(interaction_values_global, X, config, output_dir)
 
     bw_opt = optimize_bandwidth(config, X, y, coords, output_dir=output_dir)
     logging.info(f"最优带宽 bw = {bw_opt}")

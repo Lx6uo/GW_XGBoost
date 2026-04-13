@@ -1,0 +1,137 @@
+repository:
+  name: ISML
+  type: script-first research repository
+  primary_language: python
+  package_manager: uv
+  uv_project_root: Code
+  default_shell: powershell
+
+read_order:
+  - AGENTS.md
+  - docs/AGENT_CONTEXT.md
+  - docs/repo_index.yaml
+  - Code/xgb/AGENTS.md
+  - Code/gwxgb/AGENTS.md
+  - Code/gwxgb/compare/AGENTS.md
+
+source_of_truth_priority:
+  - Code/**/*.py
+  - Code/**/*.yaml
+  - Code/PROJECT_IO.md
+  - README.md
+  - docs/LAST_STATE.md
+
+task_routes:
+  global_xgb:
+    guide: Code/xgb/AGENTS.md
+    entrypoints:
+      - Code/xgb/xgb_shap.py
+      - Code/xgb/xgb_nestedcv_tune.py
+      - Code/xgb/xgb_gridcv_tune.py
+      - Code/xgb/xgb_shap_robustness.py
+      - Code/xgb/xgb_shap_interaction_matrix.py
+      - Code/xgb/normalize_feature_table.py
+      - Code/xgb/feature_corr_heatmap.py
+      - Code/xgb/spearman_corr_heatmap_batch.py
+    config_files:
+      - Code/xgb/config.yaml
+    outputs_root:
+      - Output/output_xgb
+    notes:
+      - Code/xgb/xgb_shap.py exports helper functions reused by gwxgb modules.
+
+  geo_xgb:
+    guide: Code/gwxgb/AGENTS.md
+    entrypoints:
+      - Code/gwxgb/gwxgb_shap.py
+      - Code/gwxgb/run_curated_output_batch.py
+    config_files:
+      - Code/gwxgb/gwxgb_config.yaml
+    outputs_root:
+      - Output/output_gwxgb
+      - Output/YYMMDD_n
+    notes:
+      - local SHAP is enabled by default in the current gwxgb config.
+      - curated batch output groups artifacts by dataset and stage.
+
+  compare:
+    guide: Code/gwxgb/compare/AGENTS.md
+    entrypoints:
+      - Code/gwxgb/compare/gwxgb_compare_all.py
+      - Code/gwxgb/compare/gwxgb_compare_center_local_demo.py
+      - Code/gwxgb/compare/gwxgb_compare_local_importance_demo.py
+      - Code/gwxgb/compare/gwxgb_compare_pooled_local_demo.py
+    config_files:
+      - Code/gwxgb/compare/gwxgb_compare_all_config.yaml
+      - Code/gwxgb/compare/gwxgb_compare_center_local_config.yaml
+      - Code/gwxgb/compare/gwxgb_compare_local_importance_config.yaml
+      - Code/gwxgb/compare/gwxgb_compare_pooled_local_config.yaml
+    compare_modes:
+      - center_local
+      - local_importance
+      - pooled_local
+      - sample_aggregated_local
+    outputs_root:
+      - Output/output_gwxgb_compare
+    notes:
+      - compare configs inherit ../gwxgb_config.yaml
+      - compare output defaults capture_prints to 0
+
+paths:
+  docs:
+    repo_overview: README.md
+    code_overview: Code/README.md
+    io_contract: Code/PROJECT_IO.md
+    collaboration: CONTRIBUTING.md
+    session_state: docs/LAST_STATE.md
+  data:
+    root: Data
+  outputs:
+    root: Output
+
+guardrails:
+  yaml_relative_path_rule: relative paths resolve from the YAML file location
+  generated_outputs_go_to: Output
+  input_data_stays_in: Data
+  avoid_editing_without_explicit_request:
+    - Code/.venv
+    - Code/.uv-cache
+    - Code/uv.lock
+    - Output
+    - Data
+
+current_behavior:
+  compare_modes:
+    - center_local
+    - local_importance
+    - pooled_local
+    - sample_aggregated_local
+  compare_defaults:
+    capture_prints: 0
+  curated_batch_defaults:
+    datasets:
+      - 2005
+      - 2010
+      - 2015
+      - 2020
+      - full
+    dataset_folder_names:
+      "2005": "2005"
+      "2010": "2010"
+      "2015": "2015"
+      "2020": "2020"
+      "full": "2002_2020_full"
+    stage_dirs:
+      gwxgb: gwxgb_results_and_global_interactions
+      interaction_matrix: shap_interaction_matrix
+      local_shap: local_shap_tables
+      sample_aggregated_local: sample_aggregated_local_shap
+      reuse_logs: reused_source_logs
+
+doc_sync:
+  update_on_behavior_change:
+    - README.md
+    - Code/README.md
+    - Code/PROJECT_IO.md
+    - docs/repo_index.yaml
+    - docs/LAST_STATE.md

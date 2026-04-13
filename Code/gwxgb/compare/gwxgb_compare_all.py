@@ -11,6 +11,7 @@ from gwxgb_compare_demo_common import (
     build_arg_parser,
     build_importance_table,
     build_local_importance_outputs,
+    build_sample_aggregated_local_df,
     compare_metric_dict,
     compare_signed_metric_dict,
     prepare_run,
@@ -20,6 +21,8 @@ from gwxgb_compare_demo_common import (
     save_local_importance_native_plots,
     save_metrics_report,
     save_pooled_local_native_plots,
+    save_sample_aggregated_local_dependence_plots,
+    save_sample_aggregated_local_native_plots,
 )
 
 
@@ -293,6 +296,104 @@ def _run_pooled_local(
     return metrics
 
 
+def _run_sample_aggregated_local(
+    artifacts: Any,
+    *,
+    output_dir: Path,
+    compare_cfg: Dict[str, Any],
+) -> Dict[str, Any]:
+    pooled_df = artifacts.local_pooled_df.copy()
+    if pooled_df.empty:
+        raise ValueError("未采集到 pooled 局部 SHAP 行，无法执行 sample 聚合口径对比。")
+
+    section_dir = _ensure_section_dir(output_dir, "sample_aggregated_local")
+    sample_aggregated_df = build_sample_aggregated_local_df(artifacts)
+    feature_names = list(artifacts.X.columns)
+    aggregated_mean_abs = np.array(
+        [
+            float(
+                np.mean(
+                    np.abs(
+                        sample_aggregated_df[f"shap_{feature}"].to_numpy(dtype=float)
+                    )
+                )
+            )
+            for feature in feature_names
+        ],
+        dtype=float,
+    )
+    aggregated_importance_df = build_importance_table(
+        feature_names,
+        aggregated_mean_abs,
+        prefix="sample_aggregated_local",
+    )
+
+    compare_df = artifacts.global_importance_df.merge(
+        aggregated_importance_df,
+        on="feature",
+        how="outer",
+    )
+    compare_df["share_diff_sample_aggregated_minus_global"] = (
+        compare_df["sample_aggregated_local_importance_share"]
+        - compare_df["global_importance_share"]
+    )
+    compare_df.sort_values("global_importance_share", ascending=False, inplace=True)
+    compare_df.reset_index(drop=True, inplace=True)
+
+    compare_path = section_dir / "global_vs_sample_aggregated_local_shap.csv"
+    compare_df.to_csv(compare_path, index=False, encoding="utf-8-sig")
+    logging.info(f"sample 聚合局部 SHAP 对比表已保存: {compare_path}")
+
+    rows_path = section_dir / "sample_aggregated_local_shap_rows.csv"
+    sample_aggregated_df.to_csv(rows_path, index=False, encoding="utf-8-sig")
+    logging.info(f"sample 聚合局部 SHAP 明细已保存: {rows_path}")
+
+    save_sample_aggregated_local_native_plots(
+        artifacts,
+        sample_aggregated_df,
+        output_dir=section_dir,
+        compare_cfg=compare_cfg,
+    )
+    save_sample_aggregated_local_dependence_plots(
+        artifacts,
+        sample_aggregated_df,
+        output_dir=section_dir,
+    )
+
+    metrics = compare_metric_dict(
+        compare_df,
+        left_share_col="global_importance_share",
+        right_share_col="sample_aggregated_local_importance_share",
+        top_k=int(compare_cfg.get("top_k", 5)),
+        left_name="global",
+        right_name="sample_aggregated_local",
+    )
+    metrics["n_sample_aggregated_rows"] = int(len(sample_aggregated_df))
+    metrics["mean_reuse_count"] = (
+        float(sample_aggregated_df["reuse_count"].mean())
+        if len(sample_aggregated_df) > 0
+        else float("nan")
+    )
+    metrics["max_reuse_count"] = (
+        int(sample_aggregated_df["reuse_count"].max())
+        if len(sample_aggregated_df) > 0
+        else 0
+    )
+    report_path = section_dir / "sample_aggregated_local_comparison_metrics.txt"
+    save_metrics_report(
+        report_path,
+        title="Sample-aggregated local SHAP vs Global SHAP",
+        metrics=metrics,
+        extra_lines=[
+            "说明：先保留 pooled_local 的全部局部 SHAP 行，再按 sample_pos 聚合为每个原始样本一条 SHAP 向量。",
+            "聚合方式为对每个样本在所有被纳入邻域时的 signed SHAP 取平均，再据此输出 summary / bar 图。",
+            "该口径保留了‘一个样本在多个局部模型下被如何解释’的信息，同时避免 pooled_local 的重复计数放大。",
+        ],
+    )
+    metrics["method"] = "sample_aggregated_local"
+    return metrics
+
+
 def _save_overview(output_dir: Path, metrics_rows: List[Dict[str, Any]]) -> None:
     if not metrics_rows:
         logging.warning("未生成任何 comparison metrics，跳过 overview 输出。")
@@ -321,7 +422,7 @@ def _save_overview(output_dir: Path, metrics_rows: List[Dict[str, Any]]) -> None
 
 def main() -> None:
     parser = build_arg_parser(
-        "一次运行同时完成 center_local、local_importance、pooled_local 三种 gwxgb SHAP 对比。"
+        "一次运行同时完成 center_local、local_importance、pooled_local、sample_aggregated_local 四种 gwxgb SHAP 对比。"
     )
     args = parser.parse_args()
     if args.config:
@@ -363,6 +464,15 @@ def main() -> None:
     if _enabled(compare_cfg, "run_pooled_local", 1):
         metrics_rows.append(
             _run_pooled_local(
+                artifacts,
+                output_dir=output_dir,
+                compare_cfg=compare_cfg,
+            )
+        )
+
+    if _enabled(compare_cfg, "run_sample_aggregated_local", 1):
+        metrics_rows.append(
+            _run_sample_aggregated_local(
                 artifacts,
                 output_dir=output_dir,
                 compare_cfg=compare_cfg,

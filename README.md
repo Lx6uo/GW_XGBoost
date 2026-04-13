@@ -56,6 +56,7 @@
 
 ```text
 ISML/
+├─ AGENTS.md                 # 仓库级 agent 入口与任务路由
 ├─ Code/                     # 核心代码与配置；同时也是 uv 项目根目录
 │  ├─ xgb/                   # 全局 XGBoost 工作流
 │  ├─ gwxgb/                 # GeoXGBoost 主流程
@@ -66,6 +67,7 @@ ISML/
 │  ├─ README.md              # Code 目录级说明
 │  └─ pyproject.toml         # uv / Python 依赖声明
 ├─ Data/                     # 输入数据
+├─ docs/                     # agent 上下文、机器可读索引、最近状态
 ├─ Output/                   # 运行输出
 ├─ Ref/                      # 参考文献与资料
 ├─ test/                     # Demo 与对照样例
@@ -141,6 +143,8 @@ python .\Code\xgb\xgb_shap.py -c .\Code\xgb\config.yaml
 cd .\Code
 
 uv run python .\xgb\xgb_shap.py -c .\xgb\config.yaml
+uv run python .\xgb\spearman_corr_heatmap_batch.py -c .\xgb\config.yaml
+uv run python .\xgb\xgb_shap_interaction_matrix.py -c .\xgb\config.yaml
 uv run python .\gwxgb\gwxgb_shap.py -c .\gwxgb\gwxgb_config.yaml
 uv run python .\gwxgb\compare\gwxgb_compare_all.py -c .\gwxgb\compare\gwxgb_compare_all_config.yaml
 ```
@@ -194,6 +198,7 @@ Entry:
 - 训练一个全局基线模型
 - 查看整体特征重要性
 - 生成 SHAP summary / dependence / interaction 输出
+- 复刻矩阵式 SHAP interaction 图时，可配合 `xgb_shap_interaction_matrix.py`
 
 主要产出：
 
@@ -201,6 +206,11 @@ Entry:
 - `mean_abs_shap.png`
 - `shap_dependence_<feature>.png`
 - `shap_interactions.csv`
+
+相关脚本：
+
+- [`Code/xgb/xgb_shap_interaction_matrix.py`](Code/xgb/xgb_shap_interaction_matrix.py)
+  - 用 `interaction_matrix.*` 配置单独生成“上三角热块 + 下三角蜂群”的 SHAP interaction matrix 图
 
 ### 2. Hyperparameter tuning
 
@@ -225,12 +235,14 @@ Entrypoints:
 
 - [`Code/xgb/normalize_feature_table.py`](Code/xgb/normalize_feature_table.py)
 - [`Code/xgb/feature_corr_heatmap.py`](Code/xgb/feature_corr_heatmap.py)
+- [`Code/xgb/spearman_corr_heatmap_batch.py`](Code/xgb/spearman_corr_heatmap_batch.py)
 - [`Code/xgb/verify_fix.py`](Code/xgb/verify_fix.py)
 
 适合：
 
 - 对绝对量特征做归一化
 - 画特征相关性热力图
+- 一次性批量输出 2005 / 2010 / 2015 / 2020 的 Spearman 相关性热力图
 - 检查 CSV 中带 `%` 或字符串数值的自动转换是否符合预期
 
 ### 4. Attribution-oriented SHAP robustness analysis
@@ -267,6 +279,9 @@ Entry:
 - `LW_GXGB.xlsx`
 - `gw_shap_summary.png`
 - `gw_shap_dependence_<feature>.png`
+- `gw_shap_interactions.csv`
+- `gw_shap_interaction_top_<rank>_<feature1>_x_<feature2>.png`
+- `gw_shap_interaction_<base>_x_<other>.png`
 - 可选：`local_shap/` 大量局部 SHAP 输出
 
 ### 6. Global vs local SHAP comparison suite
@@ -278,20 +293,41 @@ Entry:
 
 作用：
 
-- 用统一流程同时生成 3 种“全局 SHAP vs 局部 SHAP”比较口径
+- 用统一流程同时生成 4 种“全局 SHAP vs 局部 SHAP”比较口径
 - 输出总览指标、分口径 CSV 和 SHAP 原生图形
 
 如果你只打算保留一个 compare 入口，建议保留这一套统一入口。
 
+### 7. Curated batch export runner
+
+Entry:
+
+- [`Code/gwxgb/run_curated_output_batch.py`](Code/gwxgb/run_curated_output_batch.py)
+
+适合：
+
+- 一次批量整理 `2005` / `2010` / `2015` / `2020` / `full` 5 套数据输出
+- 将 `gwxgb` 结果、全局交互图、interaction matrix、`local_shap` 表和 `sample_aggregated_local` 结果按固定目录结构归档
+- 对 4 个年份数据优先复用已有 `Output/output_gwxgb/` 结果，减少重复运行时间
+
+主要产出：
+
+- `Output/YYMMDD_n/<dataset>/gwxgb_results_and_global_interactions/`
+- `Output/YYMMDD_n/<dataset>/shap_interaction_matrix/`
+- `Output/YYMMDD_n/<dataset>/local_shap_tables/`
+- `Output/YYMMDD_n/<dataset>/sample_aggregated_local_shap/`
+- `Output/YYMMDD_n/<dataset>/reused_source_logs/`（仅当复用已有输出时）
+
 ## Global vs Local SHAP Comparison
 
-compare 套件目前有 3 种口径，它们回答的问题不同。
+compare 套件目前有 4 种口径，它们回答的问题不同。
 
 | Mode | Core idea | Best use | Main caveat | Color in summary |
 | --- | --- | --- | --- | --- |
 | `center_local` | 每个中心位置只保留一条“中心样本在自己的局部模型下”的 SHAP | 作为全局 vs 局部解释的主对比口径 | 只看中心点，不展开邻域内部样本 | 中心样本的原始特征值 |
 | `local_importance` | 每个局部模型先汇总为一条向量，再比较强度与方向 | 看空间异质性是否被全局模型平均掉 | 已从样本级解释上升到模型级汇总，方向需单独解读 | 各局部模型中心点的原始特征值 |
 | `pooled_local` | 把所有局部邻域样本 SHAP 全部拼池后整体观察 | 演示“所有局部解释合并后”的整体形态 | 会重复计数同一样本 | 每个 pooled 样本的原始特征值 |
+| `sample_aggregated_local` | 先保留 pooled 局部 SHAP，再按原始样本聚合成“一样本一条平均 SHAP 向量” | 在保留多次邻域解释信息的同时，避免重复计数放大 | 会把同一样本在不同局部模型下的差异平均掉 | 每个样本自己的原始特征值 |
 
 ### Interpreting `local_importance`
 
@@ -381,6 +417,18 @@ Output/
    └─ gwxgb_compare_all_<data_name>_<timestamp>/
 ```
 
+批量整理脚本 `Code/gwxgb/run_curated_output_batch.py` 另外会创建：
+
+```text
+Output/
+└─ YYMMDD_n/
+   ├─ 2005/
+   ├─ 2010/
+   ├─ 2015/
+   ├─ 2020/
+   └─ 2002_2020_full/
+```
+
 每个运行目录通常包含：
 
 - `run_log.txt`
@@ -399,20 +447,37 @@ output:
 
 这会把 `stdout` / `stderr` 一并写入日志，方便追踪 geoxgboost 或 shap 在控制台打印的运行信息。
 
+例外：
+
+- compare 统一入口配置默认使用 `output.capture_prints: 0`
+- `run_curated_output_batch.py` 内部也会按阶段显式关闭捕获并写独立日志文件
+
 ## Documentation Map
 
 如果你想进一步读细节，而不是只看首页 README，请按下面顺序进入：
 
-1. [`Code/README.md`](Code/README.md)  
+1. [`AGENTS.md`](AGENTS.md)
+   适合新会话快速建立任务路由，避免重新扫完整仓库。
+
+2. [`docs/AGENT_CONTEXT.md`](docs/AGENT_CONTEXT.md)
+   适合快速看当前仓库状态、约束和阅读优先级。
+
+3. [`docs/repo_index.yaml`](docs/repo_index.yaml)
+   适合 agent 读取机器可读的入口、输出和约束索引。
+
+4. [`docs/LAST_STATE.md`](docs/LAST_STATE.md)
+   适合作为跨会话最近状态和最近一次文档同步的检查点。
+
+5. [`Code/README.md`](Code/README.md)
    适合从“脚本入口视角”快速浏览代码层工作流。
 
-2. [`Code/PROJECT_IO.md`](Code/PROJECT_IO.md)  
+6. [`Code/PROJECT_IO.md`](Code/PROJECT_IO.md)
    适合查每个脚本的输入、配置、输出文件结构。
 
-3. [`Code/gwxgb/compare/README.md`](Code/gwxgb/compare/README.md)  
+7. [`Code/gwxgb/compare/README.md`](Code/gwxgb/compare/README.md)
    适合单独查看 compare 套件的组织方式。
 
-4. [`CONTRIBUTING.md`](CONTRIBUTING.md)  
+8. [`CONTRIBUTING.md`](CONTRIBUTING.md)
    适合协作者了解目录约定、路径约定、输出约定。
 
 ## Practical Notes
@@ -476,6 +541,7 @@ output:
 - 输出放在 `Output/`
 - 配置驱动优先于硬编码路径
 - 新增工作流优先增加独立配置文件
+- 入口、输出或约束变更时，同步更新 `AGENTS.md`、`docs/repo_index.yaml` 与 `docs/LAST_STATE.md`
 
 ## Acknowledgements
 

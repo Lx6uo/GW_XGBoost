@@ -7,6 +7,8 @@
 - `Output/`：运行产物（图像/CSV/日志等）
 - `Ref/`：参考文献与资料（不参与运行）
 - `test/`：Demo/示例（用于验证或对照）
+- `docs/`：仓库级 agent 上下文、机器可读索引、最近状态
+- `AGENTS.md`：仓库级协作入口；新会话优先读这里
 
 ## 路径约定（可移植）
 
@@ -23,3 +25,17 @@
 - 所有新输出默认写到 `Output/` 下的新子目录。
 - 不要把生成物写回 `Data/`（方便区分输入与产出）。
 
+## Agent 协作文件
+
+- 新会话或新协作者优先阅读：
+  - `AGENTS.md`
+  - `docs/AGENT_CONTEXT.md`
+  - `docs/repo_index.yaml`
+  - `docs/LAST_STATE.md`
+- 如果新增或修改了脚本入口、配置结构、输出文件名、目录约定，请在同一次改动里同步更新：
+  - `README.md`
+  - `Code/README.md`
+  - `Code/PROJECT_IO.md`
+  - `docs/repo_index.yaml`
+  - `docs/LAST_STATE.md`
+- 如需补充仓库专属 agent 能力，请优先在 `.agents/skills/` 下新增或更新 skill，而不是把大量细节散落到多个无约束文档里。

@@ -1,0 +1,6 @@
+interface:
+  display_name: "ISML Workflow"
+  short_description: "Route work inside the ISML XGBoost / GeoXGBoost / SHAP repository"
+
+policy:
+  allow_implicit_invocation: true

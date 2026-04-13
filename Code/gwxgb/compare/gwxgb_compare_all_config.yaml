@@ -14,3 +14,4 @@ compare:
   run_center_local: 1
   run_local_importance: 1
   run_pooled_local: 1
+  run_sample_aggregated_local: 1

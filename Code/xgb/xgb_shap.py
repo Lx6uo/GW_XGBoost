@@ -407,12 +407,19 @@ class _TeeStream:
 
     def write(self, data: str) -> int:
         self._primary.write(data)
-        self._secondary.write(data)
+        try:
+            self._secondary.write(data)
+        except Exception:
+            # 解释器退出阶段 secondary 可能已关闭；保留主控制台输出即可。
+            pass
         return len(data)
 
     def flush(self) -> None:
         self._primary.flush()
-        self._secondary.flush()
+        try:
+            self._secondary.flush()
+        except Exception:
+            pass
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._primary, name)
@@ -729,35 +736,29 @@ def summarize_and_save_interactions(
     X: pd.DataFrame,
     config: Dict[str, Any],
     output_dir: Path,
-) -> None:
+) -> pd.DataFrame:
     """汇总特征交互强度并保存为 CSV 文件。"""
     if interaction_values is None:
-        return
+        return pd.DataFrame(
+            columns=["feature_1", "feature_2", "mean_abs_interaction"]
+        )
 
     shap_cfg = config.get("shap") or {}
     compute_interactions = int(shap_cfg.get("compute_interactions", 0)) == 1
     if not compute_interactions:
-        return
+        return pd.DataFrame(
+            columns=["feature_1", "feature_2", "mean_abs_interaction"]
+        )
 
-    mean_abs_interactions = np.mean(np.abs(interaction_values), axis=0)
-    n_features = mean_abs_interactions.shape[0]
+    df_pairs = build_interaction_pairs_df(interaction_values, X)
 
-    rows = [
-        {
-            "feature_1": X.columns[i],
-            "feature_2": X.columns[j],
-            "mean_abs_interaction": float(mean_abs_interactions[i, j]),
-        }
-        for i in range(n_features)
-        for j in range(i + 1, n_features)
-    ]
-    df_pairs = pd.DataFrame(rows)
-    df_pairs.sort_values("mean_abs_interaction", ascending=False, inplace=True)
+    top_n = max(0, int(shap_cfg.get("interaction_top_n_pairs", 20)))
+    df_top = df_pairs.head(top_n).copy()
 
-    top_n = int(shap_cfg.get("interaction_top_n_pairs", 20))
-    df_top = df_pairs.head(top_n)
-
-    top_array = df_top[["feature_1", "feature_2", "mean_abs_interaction"]].values.tolist()
+    top_array = (
+        df_top[["feature_1", "feature_2", "mean_abs_interaction"]]
+        .values.tolist()
+    )
     logging.info(
         "Top SHAP interaction pairs "
         "[feature_1, feature_2, mean_abs_interaction]: "
@@ -772,7 +773,165 @@ def summarize_and_save_interactions(
         f"Top {len(df_top)} SHAP interaction pairs "
         f"saved to: {path}"
     )
-    
+    return df_top
+
+
+def build_interaction_pairs_df(
+    interaction_values: np.ndarray,
+    X: pd.DataFrame,
+) -> pd.DataFrame:
+    """构建全部特征两两交互强度表，并按 mean(|interaction|) 降序排序。"""
+    interaction_array = np.asarray(interaction_values, dtype=float)
+    if interaction_array.ndim != 3:
+        raise ValueError(
+            "interaction_values 必须是 3 维数组，形状应为 (n_samples, n_features, n_features)。"
+        )
+
+    mean_abs_interactions = np.mean(np.abs(interaction_array), axis=0)
+    n_features = mean_abs_interactions.shape[0]
+    rows = [
+        {
+            "feature_1": str(X.columns[i]),
+            "feature_2": str(X.columns[j]),
+            "mean_abs_interaction": float(mean_abs_interactions[i, j]),
+        }
+        for i in range(n_features)
+        for j in range(i + 1, n_features)
+    ]
+    df_pairs = pd.DataFrame(rows)
+    if df_pairs.empty:
+        return pd.DataFrame(
+            columns=["feature_1", "feature_2", "mean_abs_interaction"]
+        )
+    df_pairs.sort_values(
+        ["mean_abs_interaction", "feature_1", "feature_2"],
+        ascending=[False, True, True],
+        inplace=True,
+        kind="mergesort",
+    )
+    df_pairs.reset_index(drop=True, inplace=True)
+    return df_pairs
+
+
+def _safe_feature_token(feature: Any) -> str:
+    text = str(feature)
+    return text.replace("/", "_").replace("\\", "_")
+
+
+def _plot_interaction_pair(
+    interaction_values: np.ndarray,
+    X: pd.DataFrame,
+    *,
+    x_feature: str,
+    color_feature: str,
+    output_path: Path,
+) -> None:
+    if x_feature not in X.columns or color_feature not in X.columns:
+        raise KeyError(
+            f"交互图特征不存在：x_feature={x_feature}, color_feature={color_feature}"
+        )
+
+    x_idx = X.columns.get_loc(x_feature)
+    color_idx = X.columns.get_loc(color_feature)
+    interaction_pair = np.asarray(
+        interaction_values[:, x_idx, color_idx], dtype=float
+    )
+    x_axis = pd.to_numeric(X[x_feature], errors="coerce").to_numpy(dtype=float)
+    color_values = pd.to_numeric(X[color_feature], errors="coerce").to_numpy(dtype=float)
+    mask = (
+        np.isfinite(x_axis)
+        & np.isfinite(color_values)
+        & np.isfinite(interaction_pair)
+    )
+    if int(mask.sum()) < 2:
+        raise ValueError(
+            f"交互图 `{x_feature}` x `{color_feature}` 缺少足够的有效数值样本。"
+        )
+
+    x_axis = x_axis[mask]
+    color_values = color_values[mask]
+    interaction_pair = interaction_pair[mask]
+
+    plt.figure()
+    plt.scatter(x_axis, interaction_pair, c=color_values, cmap="plasma", s=10)
+
+    order = np.argsort(x_axis, kind="mergesort")
+    x_sorted = x_axis[order]
+    y_sorted = interaction_pair[order]
+    n = len(x_sorted)
+    if n >= 5:
+        window = max(11, n // 5)
+        y_smooth = (
+            pd.Series(y_sorted)
+            .rolling(window, center=True, min_periods=1)
+            .mean()
+            .to_numpy()
+        )
+        plt.plot(x_sorted, y_smooth, color="red")
+
+    plt.xlabel(x_feature)
+    plt.ylabel(f"SHAP interaction values for {x_feature} and {color_feature}")
+    cbar = plt.colorbar()
+    cbar.set_label(f"{color_feature} (feature value)")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+def plot_top_interactions(
+    interaction_values: Optional[np.ndarray],
+    X: pd.DataFrame,
+    config: Dict[str, Any],
+    output_dir: Path,
+) -> None:
+    """为平均绝对交互强度排名前 N 的特征对分别输出交互图。"""
+    if interaction_values is None:
+        return
+
+    shap_cfg = config.get("shap") or {}
+    if int(shap_cfg.get("compute_interactions", 0)) != 1:
+        return
+
+    top_n = max(0, int(shap_cfg.get("interaction_top_n_pairs", 20)))
+    if top_n <= 0:
+        return
+
+    output_cfg = config.get("output") or {}
+    prefix = str(output_cfg.get("interaction_prefix", "shap_interaction_")).strip()
+    df_top = build_interaction_pairs_df(interaction_values, X).head(top_n)
+    for rank, row in enumerate(df_top.itertuples(index=False), start=1):
+        feature_1 = str(row.feature_1)
+        feature_2 = str(row.feature_2)
+        output_path = output_dir / (
+            f"{prefix}top_{rank:02d}_{_safe_feature_token(feature_1)}"
+            f"_x_{_safe_feature_token(feature_2)}.png"
+        )
+        try:
+            _plot_interaction_pair(
+                interaction_values,
+                X,
+                x_feature=feature_1,
+                color_feature=feature_2,
+                output_path=output_path,
+            )
+            logging.info(
+                "Top SHAP interaction plot #%s for `%s` and `%s` saved to: %s",
+                rank,
+                feature_1,
+                feature_2,
+                output_path,
+            )
+        except Exception as exc:
+            plt.close("all")
+            logging.warning(
+                "Top SHAP interaction plot #%s for `%s` and `%s` failed and was skipped. Reason: %s",
+                rank,
+                feature_1,
+                feature_2,
+                exc,
+            )
+
+
 def plot_fixed_base_interactions(
     interaction_values: Optional[np.ndarray],
     X: pd.DataFrame,
@@ -786,62 +945,58 @@ def plot_fixed_base_interactions(
     shap_cfg = config.get("shap") or {}
     base_feature: Optional[str] = shap_cfg.get("interaction_base")
     with_features_cfg: Optional[List[str]] = shap_cfg.get("interaction_with")
-    if not base_feature or not isinstance(with_features_cfg, list):
+    if not base_feature:
         return
 
     if base_feature not in X.columns:
+        logging.warning("interaction_base=%s 不在特征列中，跳过基准特征交互图。", base_feature)
         return
 
-    other_features = [
-        f for f in with_features_cfg if isinstance(f, str) and f in X.columns
-    ]
+    if with_features_cfg is None:
+        other_features = [str(f) for f in X.columns if str(f) != str(base_feature)]
+    elif isinstance(with_features_cfg, list):
+        requested = [
+            str(f).strip()
+            for f in with_features_cfg
+            if str(f).strip() and str(f).strip() != str(base_feature)
+        ]
+        if requested:
+            other_features = [f for f in requested if f in X.columns]
+        else:
+            other_features = [str(f) for f in X.columns if str(f) != str(base_feature)]
+    else:
+        logging.warning(
+            "interaction_with 需为列表；当前类型为 %s，跳过基准特征交互图。",
+            type(with_features_cfg).__name__,
+        )
+        return
+
     if not other_features:
         return
-
-    base_idx = X.columns.get_loc(base_feature)
 
     output_cfg = config.get("output") or {}
     prefix = output_cfg.get("interaction_prefix", "shap_interaction_")
 
-    x_base = X[base_feature].to_numpy(dtype=float)
-
     for other in other_features:
-        other_idx = X.columns.get_loc(other)
-        inter_pair = interaction_values[:, base_idx, other_idx]
-        x_other = X[other].to_numpy(dtype=float)
-
-        plt.figure()
-        plt.scatter(x_base, inter_pair, c=x_other, cmap="plasma", s=10)
-
-        # 使用滑动窗口在排序后的 x 轴上做滚动平均，得到更平滑的曲线
-        order = np.argsort(x_base)
-        x_sorted = x_base[order]
-        y_sorted = inter_pair[order]
-        n = len(x_sorted)
-        if n >= 5:
-            window = max(11, n // 5)
-            y_smooth = (
-                pd.Series(y_sorted)
-                .rolling(window, center=True, min_periods=1)
-                .mean()
-                .to_numpy()
-            )
-            plt.plot(x_sorted, y_smooth, color="red")
-
-        plt.xlabel(base_feature)
-        plt.ylabel(f"SHAP interaction values for {base_feature} and {other}")
-        cbar = plt.colorbar()
-        cbar.set_label(f"{other} (feature value)")
-
-        safe_base = base_feature.replace("/", "_").replace("\\", "_")
-        safe_other = other.replace("/", "_").replace("\\", "_")
-        path = output_dir / f"{prefix}{safe_base}_x_{safe_other}.png"
-        plt.tight_layout()
-        plt.savefig(path, dpi=300, bbox_inches="tight")
-        plt.close()
-        logging.info(
-            f"SHAP interaction plot for `{base_feature}` and `{other}` saved to: {path}"
+        path = output_dir / (
+            f"{prefix}{_safe_feature_token(base_feature)}_x_{_safe_feature_token(other)}.png"
         )
+        try:
+            _plot_interaction_pair(
+                interaction_values,
+                X,
+                x_feature=str(base_feature),
+                color_feature=str(other),
+                output_path=path,
+            )
+            logging.info(
+                f"SHAP interaction plot for `{base_feature}` and `{other}` saved to: {path}"
+            )
+        except Exception as exc:
+            plt.close("all")
+            logging.warning(
+                f"SHAP interaction plot for `{base_feature}` and `{other}` failed and was skipped. Reason: {exc}"
+            )
 
 
 def main() -> None:
