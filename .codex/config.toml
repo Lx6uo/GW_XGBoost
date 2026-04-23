@@ -1,0 +1,11 @@
+[mcp_servers.openspace]
+enabled = true
+required = false
+command = "openspace-mcp"
+cwd = 'D:\Desk\MyDeskFiles\Event\ISML'
+startup_timeout_sec = 30.0
+tool_timeout_sec = 600.0
+
+[mcp_servers.openspace.env]
+OPENSPACE_HOST_SKILL_DIRS = 'D:\Desk\MyDeskFiles\Event\ISML\.agents\skills'
+OPENSPACE_WORKSPACE = 'D:\Desk\MyDeskFiles\Event\ISML'

@@ -1,0 +1,12 @@
+interface:
+  display_name: "Skill Discovery"
+  short_description: "Use OpenSpace to discover or evolve skills"
+
+policy:
+  allow_implicit_invocation: true
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "openspace"
+      description: "OpenSpace MCP server"
