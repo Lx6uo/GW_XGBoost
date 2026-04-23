@@ -21,6 +21,7 @@ from xgb_shap import load_config, load_dataset, setup_logging
 
 
 DEFAULT_YEARS = ["2005", "2010", "2015", "2020"]
+SUPPORTED_CORR_METHODS = ("pearson", "spearman", "kendall")
 
 matplotlib.rcParams["pdf.fonttype"] = 42
 matplotlib.rcParams["ps.fonttype"] = 42
@@ -52,10 +53,16 @@ CJK_FONT_NAME = _pick_installed_font(
     ]
 )
 
-plt.rcParams["font.family"] = LATIN_FONT_NAME
+_FONT_FAMILY_CHAIN = ([CJK_FONT_NAME] if CJK_FONT_NAME else []) + [
+    LATIN_FONT_NAME,
+    "DejaVu Sans",
+    "DejaVu Serif",
+]
+plt.rcParams["font.family"] = _FONT_FAMILY_CHAIN
 plt.rcParams["font.serif"] = [LATIN_FONT_NAME, "DejaVu Serif"]
-if CJK_FONT_NAME:
-    plt.rcParams["font.sans-serif"] = [CJK_FONT_NAME, "DejaVu Sans"]
+plt.rcParams["font.sans-serif"] = (
+    [CJK_FONT_NAME, "DejaVu Sans"] if CJK_FONT_NAME else ["DejaVu Sans"]
+)
 
 
 def _contains_cjk(text: Any) -> bool:
@@ -249,6 +256,7 @@ def plot_corr_heatmap(
     cmap: str,
     vmin: float,
     vmax: float,
+    colorbar_label: str | None = None,
 ) -> None:
     n = int(corr.shape[0])
     if n == 0:
@@ -274,7 +282,8 @@ def plot_corr_heatmap(
     title_obj.set_fontproperties(_font_properties(title, size=15, bold=True))
 
     colorbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
-    colorbar_label = "Absolute Spearman correlation" if vmin >= 0 else "Spearman correlation"
+    if colorbar_label is None:
+        colorbar_label = "Absolute correlation" if vmin >= 0 else "Correlation"
     colorbar.set_label(colorbar_label, fontproperties=_font_properties(colorbar_label, size=11))
     for label in colorbar.ax.get_yticklabels():
         label.set_fontproperties(_font_properties(label.get_text(), size=9))
@@ -301,12 +310,33 @@ def plot_corr_heatmap(
     plt.close(fig)
 
 
-def compute_spearman_corr(
+def format_correlation_label(
+    method: str,
+    *,
+    absolute_values: bool = False,
+) -> str:
+    normalized = str(method).strip().lower()
+    if normalized not in SUPPORTED_CORR_METHODS:
+        raise ValueError(
+            f"不支持的相关性方法 `{method}`；可选值：{', '.join(SUPPORTED_CORR_METHODS)}"
+        )
+    prefix = "Absolute " if absolute_values else ""
+    return f"{prefix}{normalized.capitalize()} correlation"
+
+
+def compute_feature_corr(
     config: Dict[str, Any],
     dataset_path: Path,
     *,
     include_target: bool,
+    method: str,
 ) -> tuple[pd.DataFrame, list[str], int]:
+    normalized = str(method).strip().lower()
+    if normalized not in SUPPORTED_CORR_METHODS:
+        raise ValueError(
+            f"不支持的相关性方法 `{method}`；可选值：{', '.join(SUPPORTED_CORR_METHODS)}"
+        )
+
     dataset_config = copy.deepcopy(config)
     dataset_config["data"]["path"] = str(dataset_path)
 
@@ -323,8 +353,22 @@ def compute_spearman_corr(
             f"`{dataset_path.name}` 可用于相关性计算的数值列不足 2 列。"
         )
 
-    corr = numeric_df.corr(method="spearman")
+    corr = numeric_df.corr(method=normalized)
     return corr, skipped, int(df.shape[0])
+
+
+def compute_spearman_corr(
+    config: Dict[str, Any],
+    dataset_path: Path,
+    *,
+    include_target: bool,
+) -> tuple[pd.DataFrame, list[str], int]:
+    return compute_feature_corr(
+        config,
+        dataset_path,
+        include_target=include_target,
+        method="spearman",
+    )
 
 
 def _manifest_record(
@@ -408,6 +452,10 @@ def main() -> None:
             cmap=str(args.cmap),
             vmin=0.0 if absolute_values else -1.0,
             vmax=1.0,
+            colorbar_label=format_correlation_label(
+                "spearman",
+                absolute_values=absolute_values,
+            ),
         )
 
         if skipped:

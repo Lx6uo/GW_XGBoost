@@ -96,8 +96,17 @@ interaction_matrix:
     #   - 3
     #   - 5
     #   - 7
-  # 配色与点形；scheme_index=1 会使用与两特征交互图一致的 plasma 热力配色
-  scheme_index: 1
+  # 配色与点形；下三角蜂群默认改为更有热力感、区分度也更稳的 plasma
+  # scheme_index 仅控制下三角蜂群与其 raw feature value colorbar；
+  # 上三角热块固定按 |SHAP interaction| 的顺序色映射强度
+  # colormap_trim_low / high 控制上三角热块色盘端点裁剪
+  # scatter_colormap_trim_low / high 控制下三角热力散点色盘端点裁剪
+  # 可选：1=turbo, 2=plasma, 3=viridis, 4=cividis
+  scheme_index: 2
+  colormap_trim_low: 0.02
+  colormap_trim_high: 0.02
+  scatter_colormap_trim_low: 0.14
+  scatter_colormap_trim_high: 0.10
   style_index: 11
   # 画布与文字大小
   figure_cell_size: 1.45
@@ -107,6 +116,8 @@ interaction_matrix:
   # 下三角蜂群图抖动参数
   beeswarm_bins: 35
   beeswarm_width: 0.15
+  scatter_size: 22
+  scatter_alpha: 0.82
   # 背景与标注
   lower_facecolor: "#f2f2f2"
   upper_facecolor: "#f9f9f9"

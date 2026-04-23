@@ -60,10 +60,16 @@ CJK_FONT_NAME = _pick_installed_font(
     ]
 )
 
-plt.rcParams["font.family"] = LATIN_FONT_NAME
+_FONT_FAMILY_CHAIN = ([CJK_FONT_NAME] if CJK_FONT_NAME else []) + [
+    LATIN_FONT_NAME,
+    "DejaVu Sans",
+    "DejaVu Serif",
+]
+plt.rcParams["font.family"] = _FONT_FAMILY_CHAIN
 plt.rcParams["font.serif"] = [LATIN_FONT_NAME, "DejaVu Serif"]
-if CJK_FONT_NAME:
-    plt.rcParams["font.sans-serif"] = [CJK_FONT_NAME, "DejaVu Sans"]
+plt.rcParams["font.sans-serif"] = (
+    [CJK_FONT_NAME, "DejaVu Sans"] if CJK_FONT_NAME else ["DejaVu Sans"]
+)
 
 
 def _contains_cjk(text: Any) -> bool:
@@ -94,7 +100,10 @@ def _font_properties(
 
 
 COLOR_SCHEMES: Dict[int, str] = {
-    1: "plasma",
+    1: "turbo",
+    2: "plasma",
+    3: "viridis",
+    4: "cividis",
 }
 
 STYLE_SCHEMES: Dict[int, str] = {
@@ -200,13 +209,44 @@ def _column_axis_specs(
 
 
 def _selected_cmap_name(matrix_cfg: Dict[str, Any]) -> tuple[int, str]:
-    scheme_index = int(matrix_cfg.get("scheme_index", 1))
+    scheme_index = int(matrix_cfg.get("scheme_index", 2))
     return scheme_index, COLOR_SCHEMES.get(scheme_index, COLOR_SCHEMES[1])
 
 
 def _selected_marker(matrix_cfg: Dict[str, Any]) -> tuple[int, str]:
     style_index = int(matrix_cfg.get("style_index", 11))
     return style_index, STYLE_SCHEMES.get(style_index, "o")
+
+
+def _colormap_trim_bounds(matrix_cfg: Dict[str, Any]) -> tuple[float, float]:
+    trim_low = float(matrix_cfg.get("colormap_trim_low", 0.02))
+    trim_high = float(matrix_cfg.get("colormap_trim_high", 0.02))
+    trim_low = min(max(trim_low, 0.0), 0.45)
+    trim_high = min(max(trim_high, 0.0), 0.45)
+    if trim_low + trim_high >= 0.9:
+        trim_low = 0.08
+        trim_high = 0.08
+    return trim_low, 1.0 - trim_high
+
+
+def _scatter_colormap_trim_bounds(matrix_cfg: Dict[str, Any]) -> tuple[float, float]:
+    trim_low = float(matrix_cfg.get("scatter_colormap_trim_low", 0.14))
+    trim_high = float(matrix_cfg.get("scatter_colormap_trim_high", 0.10))
+    trim_low = min(max(trim_low, 0.0), 0.45)
+    trim_high = min(max(trim_high, 0.0), 0.45)
+    if trim_low + trim_high >= 0.9:
+        trim_low = 0.14
+        trim_high = 0.10
+    return trim_low, 1.0 - trim_high
+
+
+def _trimmed_cmap(cmap_name: str, *, lower: float, upper: float) -> mcolors.Colormap:
+    base_cmap = plt.get_cmap(cmap_name)
+    sample_points = np.linspace(lower, upper, 256)
+    return mcolors.LinearSegmentedColormap.from_list(
+        f"{cmap_name}_trim_{lower:.2f}_{upper:.2f}",
+        base_cmap(sample_points),
+    )
 
 
 def _feature_alias_labels(feature_names: List[str]) -> List[str]:
@@ -451,14 +491,22 @@ def plot_shap_interaction_matrix(
     if n < 2:
         raise ValueError("至少需要 2 个特征才能绘制交互矩阵图。")
 
-    cmap = plt.get_cmap(cmap_name)
+    cmap_lower, cmap_upper = _colormap_trim_bounds(matrix_cfg)
+    scatter_lower, scatter_upper = _scatter_colormap_trim_bounds(matrix_cfg)
+    scatter_cmap = _trimmed_cmap(cmap_name, lower=scatter_lower, upper=scatter_upper)
+    upper_cmap = _trimmed_cmap("Oranges", lower=cmap_lower, upper=cmap_upper)
     off_diag_mask = ~np.eye(n, dtype=bool)
     off_diag_values = mean_abs_interaction_matrix[off_diag_mask]
     finite_off_diag = off_diag_values[np.isfinite(off_diag_values)]
-    max_off_diag = float(finite_off_diag.max()) if finite_off_diag.size > 0 else 1.0
+    if finite_off_diag.size > 0:
+        max_off_diag = float(np.nanquantile(finite_off_diag, 0.95))
+        if not np.isfinite(max_off_diag) or max_off_diag <= 0.0:
+            max_off_diag = float(finite_off_diag.max())
+    else:
+        max_off_diag = 1.0
     if max_off_diag == 0.0:
         max_off_diag = 1.0
-    norm = mcolors.Normalize(vmin=0.0, vmax=max_off_diag)
+    upper_norm = mcolors.PowerNorm(gamma=0.82, vmin=0.0, vmax=max_off_diag)
 
     col_xlims, col_xticks = _column_axis_specs(shap_interaction_values)
 
@@ -474,6 +522,8 @@ def plot_shap_interaction_matrix(
     beeswarm_seed = int(matrix_cfg.get("random_state", 42))
     lower_bg = str(matrix_cfg.get("lower_facecolor", "#f2f2f2"))
     upper_bg = str(matrix_cfg.get("upper_facecolor", "#f9f9f9"))
+    scatter_size = float(matrix_cfg.get("scatter_size", 22))
+    scatter_alpha = float(matrix_cfg.get("scatter_alpha", 0.82))
 
     for row_idx in range(n):
         for col_idx in range(n):
@@ -489,8 +539,8 @@ def plot_shap_interaction_matrix(
                 signed_val = float(mean_signed_interaction_matrix[row_idx, col_idx])
                 ax.imshow(
                     np.array([[abs_val]]),
-                    cmap=cmap,
-                    norm=norm,
+                    cmap=upper_cmap,
+                    norm=upper_norm,
                     interpolation="nearest",
                     extent=(0.0, 1.0, 0.0, 1.0),
                     aspect="auto",
@@ -562,10 +612,10 @@ def plot_shap_interaction_matrix(
                         x_vals,
                         y_vals,
                         c=feature_values,
-                        cmap=cmap,
+                        cmap=scatter_cmap,
                         norm=c_norm,
-                        s=25,
-                        alpha=0.9,
+                        s=scatter_size,
+                        alpha=scatter_alpha,
                         edgecolors="none",
                         zorder=2,
                         marker=marker_symbol,
@@ -617,6 +667,7 @@ def plot_shap_interaction_matrix(
 
     xlabel = str(matrix_cfg.get("xlabel", "SHAP interaction value")).strip()
     colorbar_label = str(matrix_cfg.get("colorbar_label", "Raw feature value")).strip()
+    upper_colorbar_label = "|SHAP interaction|"
     fig.text(
         0.5,
         0.05,
@@ -626,29 +677,60 @@ def plot_shap_interaction_matrix(
         fontproperties=_font_properties(xlabel, size=title_fontsize),
     )
 
-    cbar_ax = fig.add_axes([0.92, 0.28, 0.02, 0.45])
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(0, 1))
-    sm.set_array([])
-    cbar = fig.colorbar(sm, cax=cbar_ax, orientation="vertical")
-    cbar.set_label(
-        colorbar_label,
-        labelpad=10,
-        fontproperties=_font_properties(colorbar_label, size=title_fontsize),
+    legend_bottom = 0.28
+    legend_height = 0.36
+    upper_cbar_ax = fig.add_axes([0.94, legend_bottom, 0.02, legend_height])
+    upper_sm = plt.cm.ScalarMappable(cmap=upper_cmap, norm=upper_norm)
+    upper_sm.set_array([])
+    upper_cbar = fig.colorbar(upper_sm, cax=upper_cbar_ax, orientation="vertical")
+    upper_cbar.set_label(
+        upper_colorbar_label,
+        labelpad=8,
+        fontproperties=_font_properties(upper_colorbar_label, size=title_fontsize - 1),
     )
-    cbar.set_ticks([])
-    cbar.ax.text(
-        1.5,
+    upper_cbar.set_ticks([])
+    upper_cbar.ax.text(
+        1.45,
         0,
         "Low",
         ha="left",
         va="center",
-        fontproperties=_font_properties("Low", size=title_fontsize),
+        fontproperties=_font_properties("Low", size=title_fontsize - 1),
     )
-    cbar.ax.text(
-        1.5,
+    upper_cbar.ax.text(
+        1.45,
         1,
         "High",
         ha="left",
+        va="center",
+        fontproperties=_font_properties("High", size=title_fontsize - 1),
+    )
+
+    scatter_cbar_ax = fig.add_axes([0.03, legend_bottom, 0.02, legend_height])
+    scatter_sm = plt.cm.ScalarMappable(cmap=scatter_cmap, norm=plt.Normalize(0, 1))
+    scatter_sm.set_array([])
+    scatter_cbar = fig.colorbar(scatter_sm, cax=scatter_cbar_ax, orientation="vertical")
+    scatter_cbar.ax.yaxis.set_label_position("left")
+    scatter_cbar.ax.yaxis.set_ticks_position("left")
+    scatter_cbar.set_label(
+        colorbar_label,
+        labelpad=10,
+        fontproperties=_font_properties(colorbar_label, size=title_fontsize),
+    )
+    scatter_cbar.set_ticks([])
+    scatter_cbar.ax.text(
+        -0.55,
+        0,
+        "Low",
+        ha="right",
+        va="center",
+        fontproperties=_font_properties("Low", size=title_fontsize),
+    )
+    scatter_cbar.ax.text(
+        -0.55,
+        1,
+        "High",
+        ha="right",
         va="center",
         fontproperties=_font_properties("High", size=title_fontsize),
     )
@@ -658,7 +740,7 @@ def plot_shap_interaction_matrix(
         alias_labels=alias_labels,
         matrix_cfg=matrix_cfg,
     )
-    plt.subplots_adjust(left=0.08, right=0.9, top=0.92, bottom=0.23)
+    plt.subplots_adjust(left=0.09, right=0.91, top=0.92, bottom=0.23)
 
     png_name = _interaction_output_names(
         matrix_cfg,
