@@ -39,12 +39,17 @@ task_routes:
       - Output/output_xgb
     notes:
       - Code/xgb/xgb_shap.py exports helper functions reused by gwxgb modules.
+      - xgb_shap_interaction_matrix upper-triangle heat blocks now use absolute-value orange sequential coloring with a same-height right-side colorbar, while scheme_index controls the lower-triangle heat-style scatter and left-side raw-feature colorbar.
+      - interaction_matrix now trims upper and lower colormap endpoints separately so the upper heat blocks and lower heat-style scatter can keep different contrast levels.
 
   geo_xgb:
     guide: Code/gwxgb/AGENTS.md
     entrypoints:
       - Code/gwxgb/gwxgb_shap.py
       - Code/gwxgb/run_curated_output_batch.py
+      - Code/gwxgb/run_holdout_bw_sweep.py
+      - Code/gwxgb/run_cv_bw_sweep.py
+      - Code/gwxgb/add_cv_ols_baseline.py
     config_files:
       - Code/gwxgb/gwxgb_config.yaml
     outputs_root:
@@ -52,7 +57,17 @@ task_routes:
       - Output/YYMMDD_n
     notes:
       - local SHAP is enabled by default in the current gwxgb config.
+      - gwxgb_config.yaml defaults gw.distance_metric to euclidean, so GW local sampling, spatial weights, holdout benchmarking, and local SHAP diagnostics use the original coordinate-Euclidean distance; set haversine to use surface great-circle distance in km.
       - curated batch output groups artifacts by dataset and stage.
+      - curated batch now prefers reusing the latest complete prior dataset directory before falling back to partial gwxgb reuse.
+      - per-dataset correlation heatmaps now include both Spearman and Pearson outputs plus a manifest.
+      - curated batch now emits per-dataset raw model_metrics_and_hyperparams.csv plus readable model_summary_overview.csv / model_summary_details.csv tables, focused on GeoXGBoost vs same-param XGBoost baseline comparison with baseline CV mean/std and OOF metrics, excluding analysis-stage performance, and matching run-root summaries.
+      - curated batch now also emits a separate holdout benchmark suite: model_performance_matrix.csv / model_performance_details.csv / gwxgb_local_diagnostics.csv and matching run-root aggregates, comparing XGBoost-global vs GW-XGBoost-local on the same test split.
+      - run_holdout_bw_sweep.py scans only GeoXGBoost bw on the same holdout split, keeps XGBoost hyperparameters fixed, caps yearly bw upper bounds to the available holdout train sample count when needed, can parallelize per-bw tasks via --jobs, auto-falls back from process to thread workers in restricted Windows environments, shows terminal progress bars by default, and emits per-dataset bw_sweep_results.csv / bw_sweep_best_summary.csv / bw_sweep_local_diagnostics.csv / bw_sweep_metrics.png plus run-root aggregate sweep tables and a combined batch_bw_sweep_overview.png figure with XGBoost baseline lines, numeric labels, and a footer describing the evaluation protocol and fixed hyperparameters.
+      - run_cv_bw_sweep.py scans GeoXGBoost bw under a shared 5-fold KFold CV protocol, defaults yearly bw to 190-280 step 5, reports fold-mean metrics as primary with OOF aggregate metrics as supplemental, compares against same-fold XGBoost-global, and emits cv_bw_* per-dataset outputs plus batch_cv_bw_sweep_overview.png.
+      - add_cv_ols_baseline.py appends OLS baseline metrics to an existing CV BW sweep run root without rerunning GW-XGBoost, writes cv_ols_* outputs, and redraws the per-dataset and run-root CV overview plots with an OLS baseline line.
+      - when a complete curated dataset directory is reused, interaction matrix plots are now refreshed from cached interaction arrays when available, otherwise the interaction stage is rerun once to seed that cache.
+      - when one run root contains 2005/2010/2015/2020/full sample_aggregated_local outputs, the curated batch runner also emits cross-dataset Sankey charts under the run root.
 
   compare:
     guide: Code/gwxgb/compare/AGENTS.md
@@ -100,7 +115,7 @@ guardrails:
     - Output
     - Data
 
-current_behavior:
+  current_behavior:
   compare_modes:
     - center_local
     - local_importance
@@ -124,9 +139,39 @@ current_behavior:
     stage_dirs:
       gwxgb: gwxgb_results_and_global_interactions
       interaction_matrix: shap_interaction_matrix
+      correlation_heatmap: correlation_heatmap
       local_shap: local_shap_tables
       sample_aggregated_local: sample_aggregated_local_shap
       reuse_logs: reused_source_logs
+    run_root_dirs:
+      sankey: shap_mean_value_sankey
+    summary_files:
+      dataset:
+        - model_metrics_and_hyperparams.csv
+        - model_summary_overview.csv
+        - model_summary_details.csv
+        - model_performance_matrix.csv
+        - model_performance_details.csv
+        - gwxgb_local_diagnostics.csv
+      run_root:
+        - batch_model_metrics_and_hyperparams.csv
+        - batch_model_summary_overview.csv
+        - batch_model_summary_details.csv
+        - batch_model_performance_matrix.csv
+        - batch_model_performance_details.csv
+        - batch_gwxgb_local_diagnostics.csv
+    correlation_methods:
+      - spearman
+      - pearson
+    interaction_matrix_cache_files:
+      - interaction_values.npy
+      - interaction_test_features.csv
+  interaction_matrix:
+    upper_triangle_coloring: absolute_value_sequential
+    lower_triangle_coloring: raw_feature_value_by_scheme_index
+    default_colormap_trim:
+      low: 0.02
+      high: 0.02
 
 doc_sync:
   update_on_behavior_change:

@@ -211,6 +211,10 @@ Entry:
 
 - [`Code/xgb/xgb_shap_interaction_matrix.py`](Code/xgb/xgb_shap_interaction_matrix.py)
   - 用 `interaction_matrix.*` 配置单独生成“上三角热块 + 下三角蜂群”的 SHAP interaction matrix 图
+  - 当前默认 `scheme_index: 2` 使用更有热力感、区分度也更稳的 `plasma`；需要更强视觉冲击时仍可切回 `turbo`
+  - 上三角热块固定按 `|SHAP interaction|` 的绝对值做橙色顺序渐变，并在右侧单独显示同高度的 `|SHAP interaction|` 色标
+  - 下三角蜂群与对应 colorbar 继续按原始特征值着色，但默认改为热力渐变，并放在左侧
+  - `colormap_trim_low/high` 控制上三角热块端点裁剪；`scatter_colormap_trim_low/high` 控制下三角热力散点端点裁剪
 
 ### 2. Hyperparameter tuning
 
@@ -270,6 +274,7 @@ Entry:
 
 - 使用 `GeoXGBoost` 建立空间局部模型
 - 控制或优化带宽
+- 默认使用 `euclidean` 原始坐标欧氏距离作为 GW 局部采样和空间权重距离口径；如需地表距离可改为 `haversine`
 - 输出全局基线模型的 SHAP 解释
 - 可选输出局部模型 SHAP
 
@@ -307,16 +312,91 @@ Entry:
 适合：
 
 - 一次批量整理 `2005` / `2010` / `2015` / `2020` / `full` 5 套数据输出
-- 将 `gwxgb` 结果、全局交互图、interaction matrix、`local_shap` 表和 `sample_aggregated_local` 结果按固定目录结构归档
-- 对 4 个年份数据优先复用已有 `Output/output_gwxgb/` 结果，减少重复运行时间
+- 将 `gwxgb` 结果、全局交互图、interaction matrix、Spearman/Pearson 相关性热力图、`local_shap` 表和 `sample_aggregated_local` 结果按固定目录结构归档
+- 为每个数据集额外汇总原始宽表 + 可读版概览/明细表，聚焦 `GeoXGBoost` 主模型与同参 `XGBoost baseline` 的性能对照
+- 当单次 `run_root` 下集齐 5 套数据时，额外输出跨数据集 `sample_aggregated_local_shap_mean_value` 桑基图（全量版 + `>9%` 版）
+- 默认优先复用最新的完整批处理数据集目录；若没有完整缓存，则对 4 个年份数据回退到复用已有 `Output/output_gwxgb/` 结果
+- 命中完整批处理缓存时，批处理现在也会优先用缓存的 interaction array 重画最新的 `shap_interaction_matrix/`；若旧目录还没有该缓存，则会补跑一次 interaction matrix 阶段并写回缓存
+- 如需强制重建，可追加 `--force-rebuild`
 
 主要产出：
 
 - `Output/YYMMDD_n/<dataset>/gwxgb_results_and_global_interactions/`
 - `Output/YYMMDD_n/<dataset>/shap_interaction_matrix/`
+  - 目录内会额外缓存 interaction 重画所需的 `interaction_values.npy` 与 `interaction_test_features.csv`
+- `Output/YYMMDD_n/<dataset>/correlation_heatmap/`
 - `Output/YYMMDD_n/<dataset>/local_shap_tables/`
 - `Output/YYMMDD_n/<dataset>/sample_aggregated_local_shap/`
+- `Output/YYMMDD_n/<dataset>/model_metrics_and_hyperparams.csv`
+- `Output/YYMMDD_n/<dataset>/model_summary_overview.csv`
+- `Output/YYMMDD_n/<dataset>/model_summary_details.csv`
+- `Output/YYMMDD_n/<dataset>/model_performance_matrix.csv`
+- `Output/YYMMDD_n/<dataset>/model_performance_details.csv`
+- `Output/YYMMDD_n/<dataset>/gwxgb_local_diagnostics.csv`
+- `Output/YYMMDD_n/<dataset>/holdout_model_benchmark/`
 - `Output/YYMMDD_n/<dataset>/reused_source_logs/`（仅当复用已有输出时）
+- `Output/YYMMDD_n/batch_model_metrics_and_hyperparams.csv`
+- `Output/YYMMDD_n/batch_model_summary_overview.csv`
+- `Output/YYMMDD_n/batch_model_summary_details.csv`
+- `Output/YYMMDD_n/batch_model_performance_matrix.csv`
+- `Output/YYMMDD_n/batch_model_performance_details.csv`
+- `Output/YYMMDD_n/batch_gwxgb_local_diagnostics.csv`
+- `Output/YYMMDD_n/shap_mean_value_sankey/`（仅当 `run_root` 内同时具备 `2005/2010/2015/2020/2002_2020_full` 5 套 `sample_aggregated_local` 结果时）
+
+### 8. Holdout BW sweep runner
+
+Entry:
+
+- [`Code/gwxgb/run_holdout_bw_sweep.py`](Code/gwxgb/run_holdout_bw_sweep.py)
+
+适合：
+
+- 在统一 `test_size=0.2`、`random_state=42` 的 holdout 划分下，只对 `GW-XGBoost-local` 的 `bw` 做区间扫描
+- 保持 `XGBoost` 本身超参数不变，仅观察 `bw` 变化对 `R2 / RMSE / MAE` 的影响
+- GW 局部采样距离默认使用 `gw.distance_metric: "euclidean"`，即沿用原始经纬度坐标欧氏距离；如需地表大圆距离可改为 `haversine`
+- 将每套数据的 `GW-XGBoost-local` 扫描结果与同一测试集上的 `XGBoost-global` baseline 同表对照
+- 为每套数据自动输出三指标曲线图，直观看最优带宽落点与和 baseline 的差距
+- 可选用 `--jobs` 启用并行扫描，并在终端显示 `BW tasks` / `Datasets` 两级进度条；受限 Windows 环境下会从多进程自动回退到线程并行；`--no-progress` 可关闭进度条
+- 年份截面若将 `--year-bw-max` 设为 `0` 或超过可用训练样本数，脚本会自动按当前 holdout 训练样本数截断上限
+
+主要产出：
+
+- `Output/YYMMDD_n/<dataset>/bw_sweep_results.csv`
+- `Output/YYMMDD_n/<dataset>/bw_sweep_best_summary.csv`
+- `Output/YYMMDD_n/<dataset>/bw_sweep_local_diagnostics.csv`
+- `Output/YYMMDD_n/<dataset>/bw_sweep_metrics.png`
+- `Output/YYMMDD_n/batch_bw_sweep_results.csv`
+- `Output/YYMMDD_n/batch_bw_sweep_best_summary.csv`
+- `Output/YYMMDD_n/batch_bw_sweep_overview.png`
+  - 五套数据的总览集合图；每个子图都包含 `XGBoost-global` baseline 横线及其数值标注，图下方附统一评估口径、方法与固定超参数说明
+
+### 9. CV BW sweep runner
+
+Entry:
+
+- [`Code/gwxgb/run_cv_bw_sweep.py`](Code/gwxgb/run_cv_bw_sweep.py)
+- [`Code/gwxgb/add_cv_ols_baseline.py`](Code/gwxgb/add_cv_ols_baseline.py)
+
+适合：
+
+- 在统一 `KFold(n_splits=5, shuffle=True, random_state=42)` 口径下扫描 `GW-XGBoost-local` 的 `bw`
+- 年份截面默认扫描 `190~280`、步长 `5`；`full` 默认扫描 `3300~3900`、步长 `30`
+- 主表和主图使用 5 折验证集指标均值，同时在结果表保留合并 OOF 预测后的整体 `R2 / RMSE / MAE`
+- 将 `GW-XGBoost-local` 的 CV mean 与同折 `XGBoost-global` CV mean baseline 同图、同表对照
+- 可用 `add_cv_ols_baseline.py --run-root <已有CV输出目录>` 单独计算 OLS baseline，并把 OLS 指标追加到既有 CV 扫描表和总览图，不重跑 GW-XGBoost
+
+主要产出：
+
+- `Output/YYMMDD_n/<dataset>/cv_bw_sweep_results.csv`
+- `Output/YYMMDD_n/<dataset>/cv_bw_sweep_best_summary.csv`
+- `Output/YYMMDD_n/<dataset>/cv_bw_sweep_local_diagnostics.csv`
+- `Output/YYMMDD_n/<dataset>/cv_bw_sweep_fold_details.csv`
+- `Output/YYMMDD_n/<dataset>/cv_bw_sweep_metrics.png`
+- `Output/YYMMDD_n/batch_cv_bw_sweep_results.csv`
+- `Output/YYMMDD_n/batch_cv_bw_sweep_best_summary.csv`
+- `Output/YYMMDD_n/batch_cv_bw_sweep_fold_details.csv`
+- `Output/YYMMDD_n/batch_cv_bw_sweep_overview.png`
+- OLS 增量输出：`cv_ols_baseline.csv`、`cv_ols_fold_details.csv`、`batch_cv_ols_baseline.csv`、`batch_cv_ols_fold_details.csv`
 
 ## Global vs Local SHAP Comparison
 
@@ -426,7 +506,8 @@ Output/
    ├─ 2010/
    ├─ 2015/
    ├─ 2020/
-   └─ 2002_2020_full/
+   ├─ 2002_2020_full/
+   └─ shap_mean_value_sankey/
 ```
 
 每个运行目录通常包含：
@@ -434,6 +515,21 @@ Output/
 - `run_log.txt`
 - PNG 图像
 - CSV / XLSX 结果表
+- 批处理目录下还会额外包含原始宽表 `model_metrics_and_hyperparams.csv` / `batch_model_metrics_and_hyperparams.csv`
+- 以及更适合人工阅读的 `model_summary_overview.csv` / `model_summary_details.csv` / `batch_model_summary_overview.csv` / `batch_model_summary_details.csv`
+  - 这组表只保留 `GeoXGBoost` 主模型与“同数据、同超参数”的 `XGBoost baseline` 对照，突出 baseline 的交叉验证均值/标准差与 OOF 指标，不再混入分析阶段性能
+- 还会并存输出论文式 holdout benchmark：`model_performance_matrix.csv` / `model_performance_details.csv` / `batch_model_performance_matrix.csv` / `batch_model_performance_details.csv`
+  - 这组表使用统一的 `test_size=0.2`、`random_state=42` 划分，对 `XGBoost-global` 与 `GW-XGBoost-local` 在同一测试集上统一计算整体 `R2 / RMSE / MAE`
+  - `GW-XGBoost-local` 默认按 `euclidean` 原始坐标欧氏距离选择局部邻域并计算空间权重
+- `run_holdout_bw_sweep.py` 会在新的 `Output/YYMMDD_n/` 下输出 `bw_sweep_results.csv` / `bw_sweep_best_summary.csv` / `bw_sweep_local_diagnostics.csv` / `bw_sweep_metrics.png`
+  - 年份截面默认扫描 `140~220`、步长 `10`
+  - `full` 默认扫描 `2500~4000`、步长 `150`
+  - 每张曲线图都同时画出 `R2`、`RMSE`、`MAE` 的 `bw` 变化曲线，并叠加 `XGBoost-global` 的虚线 baseline
+- `run_cv_bw_sweep.py` 会在新的 `Output/YYMMDD_n/` 下输出 5 折 CV 口径的 `cv_bw_sweep_results.csv` / `cv_bw_sweep_best_summary.csv` / `cv_bw_sweep_local_diagnostics.csv` / `cv_bw_sweep_fold_details.csv` / `cv_bw_sweep_metrics.png`
+  - 年份截面默认扫描 `190~280`、步长 `5`
+  - 主性能列为 5 折验证集指标均值；表内同时保留合并 OOF 预测后的整体指标
+  - run root 会额外输出 `batch_cv_bw_sweep_overview.png` 总览图
+- `add_cv_ols_baseline.py` 可对已有 CV BW 输出单独追加 OLS baseline，并更新 `cv_bw_sweep_results.csv`、`cv_bw_sweep_best_summary.csv` 和总览图
 - 某些工作流下的子目录（如 `local_shap/`、`center_local/`、`local_importance/`）
 
 ### Logging

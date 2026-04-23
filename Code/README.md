@@ -6,9 +6,46 @@
 - 数据预处理（绝对值特征归一化）：`uv run python .\xgb\normalize_feature_table.py -c .\xgb\config.yaml`
 - 批量 Spearman 相关性热力图：`uv run python .\xgb\spearman_corr_heatmap_batch.py -c .\xgb\config.yaml`
 - SHAP interaction matrix 复刻图：`uv run python .\xgb\xgb_shap_interaction_matrix.py -c .\xgb\config.yaml`
+  - 当前默认 `scheme_index: 2` 使用更有热力感、区分度也更稳的 `plasma`；也保留 `turbo` / `viridis` / `cividis`
+  - 上三角热块固定按 `|SHAP interaction|` 的绝对值做橙色顺序渐变，并在右侧单独显示同高度的 `|SHAP interaction|` 色标
+  - 下三角蜂群与对应 colorbar 仍按原始特征值着色，但默认改为热力渐变，并放在左侧
+  - `colormap_trim_low/high` 控制上三角热块端点裁剪；`scatter_colormap_trim_low/high` 控制下三角热力散点端点裁剪
 - 归因稳健性分析：`uv run python .\xgb\xgb_shap_robustness.py -c .\xgb\config.yaml`
 - 全局 SHAP vs 局部 SHAP 对比统一入口：`uv run python .\gwxgb\compare\gwxgb_compare_all.py -c .\gwxgb\compare\gwxgb_compare_all_config.yaml`
 - 批量整理 5 套数据输出：`uv run python .\gwxgb\run_curated_output_batch.py`
+  - GW 局部采样距离默认来自 `gw.distance_metric: "euclidean"`，沿用原始经纬度坐标欧氏距离；如需地表距离可显式改为 `haversine`
+  - 每个数据集目录现在还会额外生成 `correlation_heatmap/`，内含 Spearman/Pearson 相关矩阵 CSV、热力图 PNG 和 manifest
+  - 每个数据集目录还会额外输出原始宽表 `model_metrics_and_hyperparams.csv`
+  - 同时也会输出更适合人工阅读的 `model_summary_overview.csv` 与 `model_summary_details.csv`
+  - 可读版 summary 现在聚焦 `GeoXGBoost` 主模型与“同数据、同超参数”的 `XGBoost baseline` 对照，并突出 baseline 的 KFold CV 均值/标准差与 OOF 指标
+  - 可读版 summary 不再纳入 interaction / correlation 这类分析阶段性能
+  - 还会并存输出论文式 holdout benchmark：`model_performance_matrix.csv`、`model_performance_details.csv`、`gwxgb_local_diagnostics.csv`
+  - holdout benchmark 使用统一 `test_size=0.2`、`random_state=42` 划分，对 `XGBoost-global` 与 `GW-XGBoost-local` 在同一测试集上统一计算整体 `R2 / RMSE / MAE`
+  - 默认优先复用最新的完整批处理数据集目录，避免每次重复训练；如需强制重建，可追加 `--force-rebuild`
+  - 命中完整批处理缓存时，脚本也会优先用缓存的 interaction array 重画最新的 `shap_interaction_matrix/`；旧目录缺缓存时才补跑一次 interaction matrix 阶段
+  - `run_root` 根目录还会汇总 `batch_model_metrics_and_hyperparams.csv`、`batch_model_summary_overview.csv`、`batch_model_summary_details.csv`、`batch_model_performance_matrix.csv`、`batch_model_performance_details.csv` 与 `batch_gwxgb_local_diagnostics.csv`
+  - 当单次 `run_root` 下集齐 `2005/2010/2015/2020/full` 时，脚本会在 `Output/YYMMDD_n/shap_mean_value_sankey/` 下额外输出两张跨数据集 SHAP mean value 桑基图（全量版 + `>9%` 版）
+- 统一 holdout 口径下的 `bw` 扫描寻优：`uv run python .\gwxgb\run_holdout_bw_sweep.py`
+  - 默认对 `2005/2010/2015/2020` 扫描 `bw=140~220, step=10`
+  - 默认对 `full` 扫描 `bw=2500~4000, step=150`
+  - 年份截面若把 `--year-bw-max` 设为 `0`，或设得超过 holdout 训练样本数，脚本会自动按训练样本上限截断
+  - 可用 `--jobs N` 按 `bw` 任务并行，建议从 `2-4` 开始；终端会显示 `BW tasks` 与 `Datasets` 进度条
+  - 若受限 Windows 环境阻止多进程，脚本会自动回退到线程并行，不会直接中断
+  - 如需安静模式，可加 `--no-progress`
+  - 固定沿用当前 `GW-XGBoost` 配置与 `XGBoost` 超参数，只改变 `bw`；默认 GW 距离口径为 `euclidean_coord_units`
+  - 每个数据集会输出 `bw_sweep_results.csv`、`bw_sweep_best_summary.csv`、`bw_sweep_local_diagnostics.csv`、`bw_sweep_metrics.png`
+  - `run_root` 根目录会汇总 `batch_bw_sweep_results.csv`、`batch_bw_sweep_best_summary.csv`，并额外输出五套数据集合图 `batch_bw_sweep_overview.png`；图中每个子图都标出 `XGBoost-global` baseline 横线及其数值，图下方统一说明评估口径、方法与固定超参数
+- 统一 5 折 CV 口径下的 `bw` 扫描寻优：`uv run python .\gwxgb\run_cv_bw_sweep.py`
+  - 默认 `KFold(n_splits=5, shuffle=True, random_state=42)`
+  - 默认对 `2005/2010/2015/2020` 扫描 `bw=190~280, step=5`
+  - 默认对 `full` 扫描 `bw=3300~3900, step=30`
+  - 主性能列和曲线图使用 5 折验证集指标均值；结果表同时保留 OOF 合并整体指标
+  - 每个数据集输出 `cv_bw_sweep_results.csv`、`cv_bw_sweep_best_summary.csv`、`cv_bw_sweep_local_diagnostics.csv`、`cv_bw_sweep_fold_details.csv`、`cv_bw_sweep_metrics.png`
+  - `run_root` 根目录会汇总 `batch_cv_bw_sweep_results.csv`、`batch_cv_bw_sweep_best_summary.csv`、`batch_cv_bw_sweep_fold_details.csv`，并输出 `batch_cv_bw_sweep_overview.png`
+- 对已有 5 折 CV BW 输出单独追加 OLS baseline：`uv run python .\gwxgb\add_cv_ols_baseline.py --run-root ..\Output\260422_cv_euclidean_all`
+  - 只训练 OLS，不重跑 GW-XGBoost 或 XGBoost
+  - 会追加 `cv_ols_baseline.csv`、`cv_ols_fold_details.csv`、`batch_cv_ols_baseline.csv`、`batch_cv_ols_fold_details.csv`
+  - 同时更新既有 `cv_bw_sweep_results.csv`、`cv_bw_sweep_best_summary.csv` 和 `batch_cv_bw_sweep_overview.png`
 - compare 系列图片默认输出为 SHAP 原生 `summary_plot` / `bar`；其中 `local_importance` 额外输出 signed SHAP 方向 summary 与正负贡献汇总 CSV，且其 summary 图的红蓝颜色按“各局部模型中心点的原始特征值”编码
 - 四种 compare 口径：
   - `center_local`：每个地理位置只保留一条中心样本局部解释，适合作为与全局 SHAP 的主比较
@@ -20,4 +57,9 @@
 - 全局 SHAP vs 局部 SHAP 对比 demo（局部拼池口径）：`uv run python .\gwxgb\compare\gwxgb_compare_pooled_local_demo.py -c .\gwxgb\compare\gwxgb_compare_pooled_local_config.yaml`
   - 上述 3 个 compare cfg 默认都会继承 `.\gwxgb\gwxgb_config.yaml`，因此主 `gwxgb` 配置一改，compare 系列会自动同步
 - `run_curated_output_batch.py` 默认输出到 `Output/YYMMDD_n/`，并按数据集与阶段目录归档；对 `2005/2010/2015/2020` 会优先复用已有 `output_gwxgb` 结果
+  - 单数据集阶段目录现在包括 `correlation_heatmap/`（Spearman/Pearson 相关性分析）
+  - 单数据集根目录还会附带 `model_metrics_and_hyperparams.csv`、`model_summary_overview.csv`、`model_summary_details.csv`、`model_performance_matrix.csv`、`model_performance_details.csv`、`gwxgb_local_diagnostics.csv`
+  - `shap_interaction_matrix/` 目录现在也会缓存 `interaction_values.npy` 与 `interaction_test_features.csv`，供后续批处理直接重画最新版交互矩阵
+  - `run_root` 根目录会附带 `batch_model_metrics_and_hyperparams.csv`、`batch_model_summary_overview.csv`、`batch_model_summary_details.csv`、`batch_model_performance_matrix.csv`、`batch_model_performance_details.csv`、`batch_gwxgb_local_diagnostics.csv`
+  - 若 `run_root` 中已具备 5 套 `sample_aggregated_local` 输出，脚本末尾还会生成跨数据集 `sample_aggregated_local_shap_mean_value` 桑基图目录 `shap_mean_value_sankey/`
 - 项目整体说明：仓库根目录 `README.md`
