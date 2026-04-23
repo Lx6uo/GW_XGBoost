@@ -11,7 +11,7 @@ import datetime
 import xgboost as xgb
 from sklearn.model_selection import GridSearchCV as SklearnGridSearchCV, KFold
 import numpy as np
-from scipy.spatial import distance_matrix
+from scipy.spatial import distance_matrix as scipy_distance_matrix
 
 import matplotlib
 
@@ -21,6 +21,9 @@ from matplotlib import rcParams
 import pandas as pd
 
 import geoxgboost.geoxgboost as gx
+
+_GEOXGBOOST_ORIGINAL_DISTANCE_MATRIX = gx.distance_matrix
+_EARTH_RADIUS_KM = 6371.0088
 
 _THIS_DIR = Path(__file__).resolve().parent
 _XGB_DIR = _THIS_DIR.parent / "xgb"
@@ -66,6 +69,184 @@ def _geoxgboost_path_save(output_dir: Path) -> str:
     if not path.endswith(os.sep):
         path += os.sep
     return path
+
+
+def _gw_distance_metric(config: Dict[str, Any]) -> str:
+    gw_cfg = config.get("gw") or {}
+    metric = str(gw_cfg.get("distance_metric", "euclidean")).strip().lower()
+    aliases = {
+        "geo": "haversine",
+        "geodesic": "haversine",
+        "great_circle": "haversine",
+        "surface": "haversine",
+        "surface_km": "haversine",
+        "wgs84": "haversine",
+    }
+    return aliases.get(metric, metric or "euclidean")
+
+
+def gw_distance_metric_label(config: Dict[str, Any]) -> str:
+    metric = _gw_distance_metric(config)
+    if metric == "haversine":
+        return "haversine_km"
+    return "euclidean_coord_units"
+
+
+def gw_distance_unit(config: Dict[str, Any]) -> str:
+    return "km" if _gw_distance_metric(config) == "haversine" else "coord_units"
+
+
+def _coord_names_from_config(config: Dict[str, Any]) -> list[str]:
+    data_cfg = config.get("data") or {}
+    return [str(name) for name in (data_cfg.get("coords") or [])]
+
+
+def _resolve_lat_lon_indices(
+    config: Dict[str, Any], coords: Any | None = None
+) -> tuple[int, int]:
+    gw_cfg = config.get("gw") or {}
+    coord_order = str(gw_cfg.get("coord_order", "auto")).strip().lower()
+    coord_order = coord_order.replace("-", "_").replace(" ", "_")
+    if coord_order in {"lat_lon", "latitude_longitude"}:
+        return 0, 1
+    if coord_order in {"lon_lat", "longitude_latitude", "lng_lat"}:
+        return 1, 0
+    if coord_order not in {"", "auto"}:
+        raise ValueError(
+            "gw.coord_order 仅支持 auto / lat_lon / lon_lat，"
+            f"当前为 {coord_order!r}。"
+        )
+
+    if isinstance(coords, pd.DataFrame):
+        names = [str(name) for name in coords.columns]
+    else:
+        names = _coord_names_from_config(config)
+
+    lat_idx: int | None = None
+    lon_idx: int | None = None
+    for idx, name in enumerate(names):
+        normalized = name.strip().lower()
+        if lat_idx is None and ("纬" in normalized or "lat" in normalized):
+            lat_idx = idx
+        if lon_idx is None and (
+            "经" in normalized or "lon" in normalized or "lng" in normalized
+        ):
+            lon_idx = idx
+
+    if (lat_idx is None or lon_idx is None) and coords is not None:
+        arr = _as_coord_array(coords)
+        if arr.shape[1] >= 2:
+            col0 = arr[:, 0]
+            col1 = arr[:, 1]
+            col0_lat_like = bool(np.nanmin(col0) >= -90.0 and np.nanmax(col0) <= 90.0)
+            col1_lat_like = bool(np.nanmin(col1) >= -90.0 and np.nanmax(col1) <= 90.0)
+            col0_lon_like = bool(np.nanmin(col0) >= -180.0 and np.nanmax(col0) <= 180.0)
+            col1_lon_like = bool(np.nanmin(col1) >= -180.0 and np.nanmax(col1) <= 180.0)
+            if col0_lat_like and col1_lon_like and not col1_lat_like:
+                return 0, 1
+            if col1_lat_like and col0_lon_like and not col0_lat_like:
+                return 1, 0
+
+    if lat_idx is None or lon_idx is None:
+        raise ValueError(
+            "gw.distance_metric=haversine 需要识别经纬度列。"
+            "请在 gw.coord_order 中显式设置 lat_lon 或 lon_lat。"
+        )
+    if lat_idx == lon_idx:
+        raise ValueError("经纬度列识别结果重复，请检查 data.coords 或 gw.coord_order。")
+    return lat_idx, lon_idx
+
+
+def _as_coord_array(coords: Any) -> np.ndarray:
+    if isinstance(coords, pd.DataFrame):
+        arr = coords.to_numpy(dtype=float, copy=False)
+    else:
+        arr = np.asarray(coords, dtype=float)
+    if arr.ndim == 1:
+        arr = arr.reshape(1, -1)
+    if arr.ndim != 2 or arr.shape[1] < 2:
+        raise ValueError("坐标数组必须是二维结构，且至少包含两列。")
+    return arr
+
+
+def _haversine_distance_matrix(
+    left_coords: Any,
+    right_coords: Any,
+    *,
+    lat_idx: int,
+    lon_idx: int,
+    radius_km: float = _EARTH_RADIUS_KM,
+) -> np.ndarray:
+    left = _as_coord_array(left_coords)
+    right = _as_coord_array(right_coords)
+    left_lat = np.radians(left[:, lat_idx])[:, None]
+    left_lon = np.radians(left[:, lon_idx])[:, None]
+    right_lat = np.radians(right[:, lat_idx])[None, :]
+    right_lon = np.radians(right[:, lon_idx])[None, :]
+
+    d_lat = right_lat - left_lat
+    d_lon = right_lon - left_lon
+    a = (
+        np.sin(d_lat / 2.0) ** 2
+        + np.cos(left_lat) * np.cos(right_lat) * np.sin(d_lon / 2.0) ** 2
+    )
+    angular = 2.0 * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
+    return (float(radius_km) * angular).astype(float, copy=False)
+
+
+def compute_gw_distance_matrix(
+    config: Dict[str, Any], left_coords: Any, right_coords: Any
+) -> np.ndarray:
+    """按 gw.distance_metric 计算 GW 局部采样距离矩阵。"""
+    metric = _gw_distance_metric(config)
+    if metric == "haversine":
+        lat_idx, lon_idx = _resolve_lat_lon_indices(config, left_coords)
+        return _haversine_distance_matrix(
+            left_coords,
+            right_coords,
+            lat_idx=lat_idx,
+            lon_idx=lon_idx,
+        )
+    if metric == "euclidean":
+        return np.asarray(scipy_distance_matrix(left_coords, right_coords), dtype=float)
+    raise ValueError(
+        "gw.distance_metric 仅支持 euclidean / haversine，"
+        f"当前为 {metric!r}。"
+    )
+
+
+def _patch_geoxgboost_distance_metric(config: Dict[str, Any], coords: Any) -> None:
+    """让 geoxgboost 内部的距离矩阵与本项目 GW 距离口径一致。"""
+    metric = _gw_distance_metric(config)
+    if metric == "haversine":
+        lat_idx, lon_idx = _resolve_lat_lon_indices(config, coords)
+
+        def _distance_matrix_haversine(
+            left_coords: Any, right_coords: Any, *args: Any, **kwargs: Any
+        ) -> np.ndarray:
+            return _haversine_distance_matrix(
+                left_coords,
+                right_coords,
+                lat_idx=lat_idx,
+                lon_idx=lon_idx,
+            )
+
+        gx.distance_matrix = _distance_matrix_haversine  # type: ignore[attr-defined]
+        logging.info(
+            "GW 距离口径: haversine 地表距离（单位 km, coord_order=%s）。",
+            (config.get("gw") or {}).get("coord_order", "auto"),
+        )
+        return
+
+    if metric == "euclidean":
+        gx.distance_matrix = _GEOXGBOOST_ORIGINAL_DISTANCE_MATRIX  # type: ignore[attr-defined]
+        logging.info("GW 距离口径: 经纬度/坐标欧氏距离（原始坐标单位）。")
+        return
+
+    raise ValueError(
+        "gw.distance_metric 仅支持 euclidean / haversine，"
+        f"当前为 {metric!r}。"
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -221,6 +402,7 @@ def optimize_bandwidth(
     output_dir: Path,
 ) -> Any:
     """根据配置（或默认范围）优化带宽 bw，并返回优化后的 bw。"""
+    _patch_geoxgboost_distance_metric(config, coords)
     gw_cfg = config.get("gw") or {}
     bw0 = gw_cfg["bw"]
     if int(gw_cfg.get("optimize_bw", 1)) == 0:
@@ -357,6 +539,7 @@ def run_gxgb(
     output_dir: Path,
 ) -> Dict[str, Any]:
     """调用 geoxgboost.gxgb 训练地理加权 XGBoost，并返回结果字典。"""
+    _patch_geoxgboost_distance_metric(config, coords)
     model_cfg = config.get("model") or {}
     params: Dict[str, Any] = model_cfg.get("params") or {}
 
@@ -506,8 +689,7 @@ def export_local_models_shap(
         )
         return
 
-    coords_arr = coords.to_numpy(dtype=float, copy=False)
-    dist_mat = distance_matrix(coords_arr, coords_arr)
+    dist_mat = compute_gw_distance_matrix(config, coords, coords)
 
     gw_cfg = config.get("gw") or {}
     kernel = str(gw_cfg.get("kernel", "Adaptive"))
@@ -638,6 +820,8 @@ def export_local_models_shap(
                 df_out.insert(0, "center_in_train", int(center_in_train))
                 df_out.insert(0, "train_use_spatial_weights", int(train_use_spatial_weights))
                 df_out.insert(0, "distance", dist_col[local_positions])
+                df_out.insert(0, "distance_unit", gw_distance_unit(config))
+                df_out.insert(0, "distance_metric", gw_distance_metric_label(config))
                 df_out.insert(0, "sample_pos", local_positions)
                 df_out.insert(0, "sample_index", local_X.index.to_numpy())
                 df_out.insert(0, "y", y.iloc[local_positions].to_numpy())

@@ -74,6 +74,13 @@ gw:
   bw_step: 5
   # 核函数类型："Adaptive" 或 "Fixed"
   kernel: "Adaptive"
+  # GW 局部采样距离口径：
+  # - euclidean：沿用原始坐标列的欧氏距离
+  # - haversine：按经纬度计算真实地表大圆距离，单位 km
+  distance_metric: "euclidean"
+  # 经纬度列顺序：auto / lat_lon / lon_lat
+  # 当前 data.coords 为 ["纬度", "经度"]，auto 可自动识别。
+  coord_order: "auto"
   # 是否使用空间权重矩阵
   spatial_weights: True
   # geoxgboost 内部使用的 XGBoost 特征重要性类型

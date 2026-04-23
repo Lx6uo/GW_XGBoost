@@ -12,12 +12,12 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.colors as mcolors
+from matplotlib import font_manager
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import shap
 import xgboost as xgb
-from scipy.spatial import distance_matrix
 
 _THIS_DIR = Path(__file__).resolve().parent
 _GWXGB_DIR = _THIS_DIR.parent
@@ -36,6 +36,9 @@ from gwxgb_shap import (
     _resolve_city_col,
     _select_local_positions,
     _spatial_weights_for_local_data,
+    compute_gw_distance_matrix,
+    gw_distance_metric_label,
+    gw_distance_unit,
     load_dataset,
     optimize_bandwidth,
     optimize_global_model,
@@ -72,6 +75,45 @@ class CompareArtifacts:
     local_signed_df: pd.DataFrame
     local_positive_df: pd.DataFrame
     local_negative_df: pd.DataFrame
+
+
+def _pick_installed_font(candidates: List[str]) -> str | None:
+    available = {font.name for font in font_manager.fontManager.ttflist}
+    for name in candidates:
+        if name in available:
+            return name
+    return None
+
+
+LATIN_FONT_NAME = _pick_installed_font(
+    ["Times New Roman", "Cambria", "Georgia", "DejaVu Serif"]
+) or "DejaVu Serif"
+CJK_FONT_NAME = _pick_installed_font(
+    [
+        "Microsoft YaHei",
+        "SimHei",
+        "SimSun",
+        "NSimSun",
+        "KaiTi",
+        "FangSong",
+        "Noto Sans CJK SC",
+        "Source Han Sans SC",
+        "Arial Unicode MS",
+    ]
+)
+
+
+def _configure_plot_fonts() -> None:
+    family: List[str] = []
+    if CJK_FONT_NAME:
+        family.append(CJK_FONT_NAME)
+    family.extend([LATIN_FONT_NAME, "DejaVu Sans", "DejaVu Serif"])
+    plt.rcParams["font.family"] = family
+    plt.rcParams["font.sans-serif"] = (
+        [CJK_FONT_NAME, "DejaVu Sans"] if CJK_FONT_NAME else ["DejaVu Sans"]
+    )
+    plt.rcParams["font.serif"] = [LATIN_FONT_NAME, "DejaVu Serif"]
+    plt.rcParams["axes.unicode_minus"] = False
 
 
 def build_arg_parser(description: str) -> argparse.ArgumentParser:
@@ -285,6 +327,7 @@ def save_shap_native_plots(
     summary_title: str,
     bar_title: str,
 ) -> None:
+    _configure_plot_fonts()
     shap_array = np.asarray(shap_values, dtype=float)
     if shap_array.ndim != 2 or shap_array.shape[0] == 0 or shap_array.shape[1] == 0:
         logging.warning("SHAP 原生图未生成：shap_values 为空或维度不合法。")
@@ -551,6 +594,7 @@ def save_combined_mean_value_summary_plot(
     output_path: Path,
     title: str,
 ) -> None:
+    _configure_plot_fonts()
     shap_array = np.asarray(shap_values, dtype=float)
     if shap_array.ndim != 2 or shap_array.shape[0] == 0 or shap_array.shape[1] == 0:
         raise ValueError("shap_values 为空或维度不合法，无法生成综合图。")
@@ -563,8 +607,9 @@ def save_combined_mean_value_summary_plot(
         feature_names=feat_names,
     )
 
-    fig_height = max(4.8, 0.52 * max_display + 1.8)
-    fig, ax_sum = plt.subplots(figsize=(12, fig_height))
+    fig_width = max(9.6, 0.58 * max_display + 3.8)
+    fig_height = max(4.8, 0.56 * max_display + 1.3)
+    fig, ax_sum = plt.subplots(figsize=(fig_width, fig_height))
     ax_mean = ax_sum.twiny()
     ax_mean.set_zorder(0)
     ax_sum.set_zorder(1)
@@ -615,11 +660,18 @@ def save_combined_mean_value_summary_plot(
     )
     ax_mean.set_ylim(ax_sum.get_ylim())
     ax_mean.set_yticks(y_ticks)
-    ax_mean.set_yticklabels([])
+    ax_mean.tick_params(
+        axis="y",
+        left=False,
+        right=False,
+        labelleft=False,
+        labelright=False,
+    )
     ax_mean.grid(False)
     ax_mean.xaxis.set_ticks_position("top")
     ax_mean.xaxis.set_label_position("top")
-    ax_mean.set_xlabel("Mean |SHAP value|", fontsize=12)
+    ax_mean.set_xlabel("Mean |SHAP value|", fontsize=12, labelpad=6)
+    ax_mean.tick_params(axis="x", pad=3)
     if finite_bar.size > 0:
         ax_mean.set_xlim(0.0, float(finite_bar.max()) * 1.1)
     else:
@@ -628,8 +680,22 @@ def save_combined_mean_value_summary_plot(
     ax_sum.set_title(title, fontsize=16, pad=16)
     ax_sum.set_xlabel("SHAP value (impact on model output)", fontsize=12)
     ax_sum.set_ylabel("Features", fontsize=12)
+    ax_sum.set_yticks(y_ticks)
+    ax_sum.set_yticklabels(displayed_features)
+    ax_sum.tick_params(axis="x", pad=3)
+    ax_sum.tick_params(axis="y", pad=8)
 
-    fig.tight_layout()
+    max_label_chars = max((len(str(label)) for label in displayed_features), default=0)
+    left_margin = min(0.44, max(0.28, 0.18 + 0.011 * max_label_chars))
+    fig.subplots_adjust(left=left_margin, right=0.84, top=0.88, bottom=0.12)
+    ax_mean.set_position(ax_sum.get_position())
+
+    extra_axes = [axis for axis in fig.axes if axis not in (ax_sum, ax_mean)]
+    if extra_axes:
+        colorbar_ax = extra_axes[0]
+        colorbar_ax.set_position([0.87, 0.14, 0.022, 0.72])
+        colorbar_ax.tick_params(pad=2)
+
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -640,6 +706,7 @@ def save_sample_aggregated_local_dependence_plots(
     *,
     output_dir: Path,
 ) -> None:
+    _configure_plot_fonts()
     if sample_aggregated_df.empty:
         logging.warning("sample 聚合后的局部 SHAP 为空，跳过 dependence 图。")
         return
@@ -926,8 +993,7 @@ def _local_shap_bundle(
 
     feature_names = [str(c) for c in X.columns]
     shap_col_names = [f"shap_{name}" for name in feature_names]
-    coords_arr = coords.to_numpy(dtype=float, copy=False)
-    dist_mat = distance_matrix(coords_arr, coords_arr)
+    dist_mat = compute_gw_distance_matrix(config, coords, coords)
 
     gw_cfg = config.get("gw") or {}
     kernel = str(gw_cfg.get("kernel", "Adaptive"))
@@ -1047,6 +1113,8 @@ def _local_shap_bundle(
         pooled_frame.insert(0, "center_in_train", int(center_in_train))
         pooled_frame.insert(0, "train_use_spatial_weights", int(train_use_spatial_weights))
         pooled_frame.insert(0, "distance", dist_col[local_positions])
+        pooled_frame.insert(0, "distance_unit", gw_distance_unit(config))
+        pooled_frame.insert(0, "distance_metric", gw_distance_metric_label(config))
         pooled_frame.insert(0, "sample_pos", local_positions)
         pooled_frame.insert(0, "sample_index", local_X.index.to_numpy())
         pooled_frame.insert(0, "y", y.iloc[local_positions].to_numpy())
@@ -1286,6 +1354,7 @@ def plot_share_comparison(
     top_n: int,
     title: str,
 ) -> None:
+    _configure_plot_fonts()
     plot_df = compare_df.copy()
     plot_df["plot_score"] = plot_df[[left_share_col, right_share_col]].max(axis=1)
     plot_df = plot_df.sort_values("plot_score", ascending=False).head(max(1, int(top_n)))
@@ -1314,6 +1383,7 @@ def plot_local_share_boxplot(
     path: Path,
     title: str,
 ) -> None:
+    _configure_plot_fonts()
     data = [
         long_df.loc[long_df["feature"] == feature, value_col].to_numpy(dtype=float)
         for feature in feature_order
@@ -1337,6 +1407,7 @@ def plot_local_share_boxplot(
 
 
 def plot_sample_reuse_histogram(reuse_df: pd.DataFrame, path: Path, *, title: str) -> None:
+    _configure_plot_fonts()
     values = reuse_df["reuse_count"].to_numpy(dtype=float, copy=False)
     values = values[np.isfinite(values)]
     if values.size == 0:
