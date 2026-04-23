@@ -57,6 +57,9 @@ htmlcov/
 *.sublime-project
 *.sublime-workspace
 
+# Local agent / machine-specific config
+.codex/
+
 # OS-specific files
 .DS_Store
 Thumbs.db
